@@ -1,0 +1,605 @@
+{
+  "flows": [
+    {
+      "description": "Camera recordings, blocked by the IoT rule",
+      "destination": "nas",
+      "id": "camera-recordings",
+      "port": 445,
+      "protocol": "tcp",
+      "source": "camera"
+    },
+    {
+      "description": "NAS web interface",
+      "destination": "nas",
+      "id": "desktop-nas-ui",
+      "port": 443,
+      "protocol": "tcp",
+      "source": "desktop"
+    },
+    {
+      "description": "Home dashboard",
+      "destination": "home-assistant",
+      "id": "laptop-dashboard",
+      "port": 8123,
+      "protocol": "tcp",
+      "source": "laptop"
+    },
+    {
+      "description": "File sharing",
+      "destination": "nas",
+      "id": "laptop-files",
+      "port": 445,
+      "protocol": "tcp",
+      "source": "laptop"
+    }
+  ],
+  "format_version": 1,
+  "links": [
+    {
+      "a": {
+        "interface": "wlan0",
+        "node": "ap"
+      },
+      "b": {
+        "interface": "wlan0",
+        "node": "laptop"
+      },
+      "id": "ap-laptop",
+      "medium": "wifi",
+      "speed_mbps": 866
+    },
+    {
+      "a": {
+        "interface": "eth3",
+        "node": "gateway"
+      },
+      "b": {
+        "interface": "port2",
+        "node": "switch"
+      },
+      "id": "gateway-switch-iot",
+      "medium": "ethernet",
+      "speed_mbps": 1000
+    },
+    {
+      "a": {
+        "interface": "eth2",
+        "node": "gateway"
+      },
+      "b": {
+        "interface": "port1",
+        "node": "switch"
+      },
+      "id": "gateway-switch-lan",
+      "medium": "ethernet",
+      "speed_mbps": 1000
+    },
+    {
+      "a": {
+        "interface": "eth1",
+        "node": "internet"
+      },
+      "b": {
+        "interface": "eth1",
+        "node": "modem"
+      },
+      "id": "internet-modem",
+      "medium": "ethernet",
+      "speed_mbps": 1000
+    },
+    {
+      "a": {
+        "interface": "eth1",
+        "node": "gateway"
+      },
+      "b": {
+        "interface": "eth2",
+        "node": "modem"
+      },
+      "id": "modem-gateway",
+      "medium": "ethernet",
+      "speed_mbps": 1000
+    },
+    {
+      "a": {
+        "interface": "eth1",
+        "node": "ap"
+      },
+      "b": {
+        "interface": "port3",
+        "node": "switch"
+      },
+      "id": "switch-ap",
+      "medium": "ethernet",
+      "speed_mbps": 1000
+    },
+    {
+      "a": {
+        "interface": "eth1",
+        "node": "camera"
+      },
+      "b": {
+        "interface": "port5",
+        "node": "switch"
+      },
+      "id": "switch-camera",
+      "medium": "ethernet",
+      "speed_mbps": 100
+    },
+    {
+      "a": {
+        "interface": "eth1",
+        "node": "desktop"
+      },
+      "b": {
+        "interface": "port6",
+        "node": "switch"
+      },
+      "id": "switch-desktop",
+      "medium": "ethernet",
+      "speed_mbps": 1000
+    },
+    {
+      "a": {
+        "interface": "eth1",
+        "node": "nas"
+      },
+      "b": {
+        "interface": "port4",
+        "node": "switch"
+      },
+      "id": "switch-nas",
+      "medium": "ethernet",
+      "speed_mbps": 2500
+    }
+  ],
+  "name": "Small homelab (invented example)",
+  "nodes": [
+    {
+      "id": "ap",
+      "interfaces": [
+        {
+          "addresses": [],
+          "mode": "trunk",
+          "name": "eth1",
+          "trunk_vlans": [
+            20
+          ],
+          "vlan": 10
+        },
+        {
+          "addresses": [],
+          "mode": "access",
+          "name": "wlan0",
+          "trunk_vlans": [],
+          "vlan": 10
+        }
+      ],
+      "kind": "access_point",
+      "name": "Living room AP",
+      "parent": null,
+      "routes": null,
+      "rules": [],
+      "services": [],
+      "x": 8,
+      "y": 0
+    },
+    {
+      "id": "camera",
+      "interfaces": [
+        {
+          "addresses": [
+            "192.168.20.10/24"
+          ],
+          "mode": "access",
+          "name": "eth1",
+          "trunk_vlans": [],
+          "vlan": 20
+        }
+      ],
+      "kind": "camera",
+      "name": "Hallway camera",
+      "parent": null,
+      "routes": null,
+      "rules": [],
+      "services": [],
+      "x": 4,
+      "y": 3
+    },
+    {
+      "id": "desktop",
+      "interfaces": [
+        {
+          "addresses": [
+            "192.168.10.50/24"
+          ],
+          "mode": "access",
+          "name": "eth1",
+          "trunk_vlans": [],
+          "vlan": 10
+        }
+      ],
+      "kind": "workstation",
+      "name": "Desktop",
+      "parent": null,
+      "routes": null,
+      "rules": [],
+      "services": [],
+      "x": 9,
+      "y": 3
+    },
+    {
+      "id": "docker-host",
+      "interfaces": [
+        {
+          "addresses": [
+            "192.168.10.31/24"
+          ],
+          "mode": "access",
+          "name": "vnic1",
+          "trunk_vlans": [],
+          "vlan": 10
+        }
+      ],
+      "kind": "vm",
+      "name": "Docker host",
+      "parent": "nas",
+      "routes": null,
+      "rules": [],
+      "services": [],
+      "x": 1,
+      "y": 0
+    },
+    {
+      "id": "gateway",
+      "interfaces": [
+        {
+          "addresses": [
+            "203.0.113.2/24"
+          ],
+          "mode": "access",
+          "name": "eth1",
+          "trunk_vlans": [],
+          "vlan": null
+        },
+        {
+          "addresses": [
+            "192.168.10.1/24"
+          ],
+          "mode": "access",
+          "name": "eth2",
+          "trunk_vlans": [],
+          "vlan": 10
+        },
+        {
+          "addresses": [
+            "192.168.20.1/24"
+          ],
+          "mode": "access",
+          "name": "eth3",
+          "trunk_vlans": [],
+          "vlan": 20
+        },
+        {
+          "addresses": [],
+          "mode": "access",
+          "name": "eth4",
+          "trunk_vlans": [],
+          "vlan": null
+        }
+      ],
+      "kind": "firewall",
+      "name": "Gateway",
+      "parent": null,
+      "routes": null,
+      "rules": [
+        {
+          "action": "deny",
+          "destination": "192.168.10.0/24",
+          "port": null,
+          "protocol": "any",
+          "source": "192.168.20.0/24"
+        },
+        {
+          "action": "allow",
+          "destination": "nas",
+          "port": 443,
+          "protocol": "tcp",
+          "source": "192.168.10.0/24"
+        },
+        {
+          "action": "allow",
+          "destination": "any",
+          "port": null,
+          "protocol": "any",
+          "source": "192.168.10.0/24"
+        }
+      ],
+      "services": [],
+      "x": 4,
+      "y": 0
+    },
+    {
+      "id": "home-assistant",
+      "interfaces": [
+        {
+          "addresses": [
+            "192.168.10.30/24"
+          ],
+          "mode": "access",
+          "name": "vnic1",
+          "trunk_vlans": [],
+          "vlan": 10
+        }
+      ],
+      "kind": "vm",
+      "name": "Home Assistant",
+      "parent": "nas",
+      "routes": null,
+      "rules": [],
+      "services": [
+        {
+          "name": "Dashboard",
+          "port": 8123,
+          "protocol": "tcp"
+        }
+      ],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "internet",
+      "interfaces": [
+        {
+          "addresses": [],
+          "mode": "access",
+          "name": "eth1",
+          "trunk_vlans": [],
+          "vlan": null
+        }
+      ],
+      "kind": "internet",
+      "name": "Internet",
+      "parent": null,
+      "routes": null,
+      "rules": [],
+      "services": [],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "laptop",
+      "interfaces": [
+        {
+          "addresses": [
+            "192.168.10.51/24"
+          ],
+          "mode": "access",
+          "name": "wlan0",
+          "trunk_vlans": [],
+          "vlan": 10
+        }
+      ],
+      "kind": "workstation",
+      "name": "Laptop",
+      "parent": null,
+      "routes": null,
+      "rules": [],
+      "services": [],
+      "x": 9,
+      "y": 1
+    },
+    {
+      "id": "modem",
+      "interfaces": [
+        {
+          "addresses": [],
+          "mode": "access",
+          "name": "eth1",
+          "trunk_vlans": [],
+          "vlan": null
+        },
+        {
+          "addresses": [],
+          "mode": "access",
+          "name": "eth2",
+          "trunk_vlans": [],
+          "vlan": null
+        }
+      ],
+      "kind": "modem",
+      "name": "Modem",
+      "parent": null,
+      "routes": null,
+      "rules": [],
+      "services": [],
+      "x": 2,
+      "y": 0
+    },
+    {
+      "id": "nas",
+      "interfaces": [
+        {
+          "addresses": [
+            "192.168.10.20/24"
+          ],
+          "mode": "access",
+          "name": "eth1",
+          "trunk_vlans": [],
+          "vlan": 10
+        },
+        {
+          "addresses": [],
+          "mode": "access",
+          "name": "eth2",
+          "trunk_vlans": [],
+          "vlan": null
+        }
+      ],
+      "kind": "nas",
+      "name": "TrueNAS",
+      "parent": null,
+      "routes": null,
+      "rules": [],
+      "services": [
+        {
+          "name": "SMB",
+          "port": 445,
+          "protocol": "tcp"
+        },
+        {
+          "name": "Web UI",
+          "port": 443,
+          "protocol": "tcp"
+        }
+      ],
+      "x": 6,
+      "y": 3
+    },
+    {
+      "id": "nextcloud",
+      "interfaces": [
+        {
+          "addresses": [
+            "172.20.0.2/24"
+          ],
+          "mode": "access",
+          "name": "veth1",
+          "trunk_vlans": [],
+          "vlan": null
+        }
+      ],
+      "kind": "container",
+      "name": "Nextcloud",
+      "parent": "docker-host",
+      "routes": null,
+      "rules": [],
+      "services": [
+        {
+          "name": "Web",
+          "port": 8080,
+          "protocol": "tcp"
+        }
+      ],
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "switch",
+      "interfaces": [
+        {
+          "addresses": [],
+          "mode": "access",
+          "name": "port1",
+          "trunk_vlans": [],
+          "vlan": 10
+        },
+        {
+          "addresses": [],
+          "mode": "access",
+          "name": "port2",
+          "trunk_vlans": [],
+          "vlan": 20
+        },
+        {
+          "addresses": [],
+          "mode": "trunk",
+          "name": "port3",
+          "trunk_vlans": [
+            20
+          ],
+          "vlan": 10
+        },
+        {
+          "addresses": [],
+          "mode": "access",
+          "name": "port4",
+          "trunk_vlans": [],
+          "vlan": 10
+        },
+        {
+          "addresses": [],
+          "mode": "access",
+          "name": "port5",
+          "trunk_vlans": [],
+          "vlan": 20
+        },
+        {
+          "addresses": [],
+          "mode": "access",
+          "name": "port6",
+          "trunk_vlans": [],
+          "vlan": 10
+        },
+        {
+          "addresses": [],
+          "mode": "access",
+          "name": "port7",
+          "trunk_vlans": [],
+          "vlan": null
+        },
+        {
+          "addresses": [],
+          "mode": "access",
+          "name": "port8",
+          "trunk_vlans": [],
+          "vlan": null
+        }
+      ],
+      "kind": "switch",
+      "name": "Core switch",
+      "parent": null,
+      "routes": null,
+      "rules": [],
+      "services": [],
+      "x": 6,
+      "y": 0
+    },
+    {
+      "id": "vaultwarden",
+      "interfaces": [
+        {
+          "addresses": [
+            "172.20.0.3/24"
+          ],
+          "mode": "access",
+          "name": "veth1",
+          "trunk_vlans": [],
+          "vlan": null
+        }
+      ],
+      "kind": "container",
+      "name": "Vaultwarden",
+      "parent": "docker-host",
+      "routes": null,
+      "rules": [],
+      "services": [
+        {
+          "name": "Web",
+          "port": 8081,
+          "protocol": "tcp"
+        }
+      ],
+      "x": 1,
+      "y": 0
+    }
+  ],
+  "zones": [
+    {
+      "height": 3,
+      "id": "iot",
+      "name": "IoT",
+      "width": 2,
+      "x": 3,
+      "y": 2
+    },
+    {
+      "height": 3,
+      "id": "lan",
+      "name": "LAN",
+      "width": 6,
+      "x": 5,
+      "y": 2
+    }
+  ]
+}
