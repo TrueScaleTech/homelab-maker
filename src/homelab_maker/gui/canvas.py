@@ -403,6 +403,9 @@ class Canvas(QGraphicsView):
         bounds = QRectF()
         for item in self.node_items.values():
             bounds = bounds.united(item.mapRectToScene(item.boundingRect()))
+        for zone in self.document.project.zones:
+            x, y = cell_origin(zone.x, zone.y)
+            bounds = bounds.united(QRectF(x, y, zone.width * CELL, zone.height * CELL))
         self.fitInView(
             bounds.adjusted(-CELL, -CELL, CELL, CELL), Qt.AspectRatioMode.KeepAspectRatio
         )

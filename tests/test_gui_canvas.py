@@ -5,7 +5,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QInputDialog
 
 from helpers import cell_point, click, ctrl_wheel, drag, move, press, release
-from homelab_maker.grid import ZOOM_MAX, ZOOM_MIN
+from homelab_maker.grid import ZOOM_MAX, ZOOM_MIN, cell_origin
 from homelab_maker.gui.canvas import Canvas
 from homelab_maker.gui.main_window import MainWindow
 from homelab_maker.gui.palette import MIME_KIND
@@ -398,6 +398,11 @@ def test_fit_brings_every_card_into_view(window: MainWindow, sample: Project) ->
     for item in canvas.node_items.values():
         corner = canvas.mapFromScene(item.pos())
         assert visible.contains(corner), item.node_id
+    # The zones are part of the picture too, so none of them is cut off at the edge.
+    for zone in sample.zones:
+        x, y = cell_origin(zone.x, zone.y)
+        far = canvas.mapFromScene(QPointF(x + zone.width * 112, y + zone.height * 112))
+        assert visible.contains(far), zone.id
     assert ZOOM_MIN <= canvas.zoom <= ZOOM_MAX
 
 
