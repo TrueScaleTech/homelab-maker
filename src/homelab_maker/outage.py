@@ -104,3 +104,27 @@ def _cut_off(project: Project, stopped: set[str]) -> tuple[str, ...]:
     before = reach(graph, internet)
     after = reach(graph, internet, removed=removed_cards)
     return tuple(sorted(before - after - removed_cards))
+
+
+def describe(project: Project, outage: Outage) -> str:
+    """The outage in a few lines of plain text, for a message box."""
+
+    def names(ids: Collection[str]) -> str:
+        found = (project.node(i) for i in sorted(ids))
+        return ", ".join(node.name for node in found if node is not None)
+
+    lines = [f"Switched off: {names(outage.stopped)}."]
+    if outage.harmless:
+        lines.append("Nothing else is affected, as far as the drawing shows.")
+        return "\n".join(lines)
+    if outage.cut_off:
+        lines.append(f"Still running but cut off: {names(outage.cut_off)}.")
+    if outage.broken:
+        lines.append("Flows that stop working:")
+        flows = {flow.id: flow for flow in project.flows}
+        for result in outage.broken:
+            flow = flows[result.flow]
+            what = flow.description or f"{flow.protocol.value}/{flow.port}"
+            ends = f"{names([flow.source])} to {names([flow.destination])}"
+            lines.append(f"  - {ends} ({what}): {result.detail}")
+    return "\n".join(lines)

@@ -22,11 +22,13 @@ from homelab_maker.document import Document
 from homelab_maker.gui import qt_theme
 from homelab_maker.gui.canvas import Canvas
 from homelab_maker.gui.findings import FindingsPanel
+from homelab_maker.gui.flows import FlowsPanel
 from homelab_maker.gui.icons import app_icon
 from homelab_maker.gui.inspector import Inspector
 from homelab_maker.gui.palette import Palette
 from homelab_maker.gui.theme import Scheme
 from homelab_maker.model import Medium, Project
+from homelab_maker.outage import describe, what_goes_down
 from homelab_maker.storage import ProjectFileError, load, save
 from homelab_maker.viewmodel import (
     APP_NAME,
@@ -81,6 +83,15 @@ class MainWindow(QMainWindow):
         checks.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, checks)
         self.findings.counted.connect(lambda _count: self._update_ui())
+
+        self.flows_panel = FlowsPanel(self.document, self.canvas, self.tokens)
+        flows = QDockWidget("Flows", self)
+        flows.setObjectName("flows-dock")
+        flows.setWidget(self.flows_panel)
+        flows.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, flows)
+        self.tabifyDockWidget(checks, flows)
+        flows.raise_()
 
         self._counts = QLabel()
         self.statusBar().addPermanentWidget(self._counts)
@@ -137,6 +148,13 @@ class MainWindow(QMainWindow):
         self.take_out_action = self._action("&Take out of its host", self.canvas.take_out)
         self.cable_action = self._action("&Cable tool", self._toggle_cable_tool, "Ctrl+K")
         self.cable_action.setCheckable(True)
+        self.add_flow_action = self._action("Add &flow…", self.flows_panel.ask_for_flow, "Ctrl+L")
+        self.outage_action = self._action(
+            "What goes &down if I switch off the selection…", self.show_outage, "Ctrl+Shift+D"
+        )
+        self.back_to_normal_action = self._action(
+            "&Back to normal", self.clear_outage, "Ctrl+Shift+N"
+        )
 
     def _build_menus(self) -> None:
         bar = self.menuBar()
@@ -176,6 +194,11 @@ class MainWindow(QMainWindow):
             theme_menu.addAction(action)
             self.scheme_actions[scheme] = action
 
+        analysis_menu = bar.addMenu("&Analysis")
+        analysis_menu.addAction(self.add_flow_action)
+        analysis_menu.addSeparator()
+        analysis_menu.addActions([self.outage_action, self.back_to_normal_action])
+
         bar.addMenu("&Help").addAction(self.about_action)
 
     def _build_toolbar(self) -> None:
@@ -209,6 +232,26 @@ class MainWindow(QMainWindow):
         if len(ids) == 1:
             self.canvas.enter(ids[0])
 
+    def show_outage(self) -> None:
+        """Switch off the selected devices on the drawing and say what stops working."""
+        ids = self.canvas.selected_ids()
+        if not ids:
+            self.statusBar().showMessage("Select the devices to switch off first.", 5000)
+            return
+        outage = what_goes_down(self.document.project, ids)
+        self.canvas.set_offline(frozenset(outage.stopped))
+        QMessageBox.information(
+            self,
+            "What goes down",
+            describe(self.document.project, outage)
+            + "\n\nThis is what the drawing says, not what the real network will do.",
+        )
+        self._update_ui()
+
+    def clear_outage(self) -> None:
+        self.canvas.set_offline(frozenset())
+        self._update_ui()
+
     def _update_ui(self) -> None:
         doc = self.document
         self.setWindowTitle(window_title(doc.path, doc.dirty))
@@ -224,6 +267,8 @@ class MainWindow(QMainWindow):
             len(selected) == 1 and self.canvas.can_enter(selected[0])
         )
         self.cable_action.setChecked(self.canvas.cable_tool)
+        self.outage_action.setEnabled(bool(selected))
+        self.back_to_normal_action.setEnabled(bool(self.canvas.offline))
         self.trail_label.setText(trail_text(doc.project, self.canvas.view))
         self.rename_action.setEnabled(len(selected) == 1)
         warnings = sum(1 for f in self.findings.findings if f.severity is Severity.WARNING)
@@ -243,6 +288,7 @@ class MainWindow(QMainWindow):
         self.canvas.set_tokens(self.tokens)
         self.device_list.set_tokens(self.tokens)
         self.findings.set_tokens(self.tokens)
+        self.flows_panel.set_tokens(self.tokens)
         self.scheme_actions[scheme].setChecked(True)
         settings.save(self.preferences)
 

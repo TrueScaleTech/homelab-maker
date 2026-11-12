@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -27,25 +28,45 @@ from homelab_maker.fields import (
     format_addresses,
     format_vlans,
     parse_addresses,
+    parse_port,
+    parse_reference,
     parse_vlan,
     parse_vlans,
 )
 from homelab_maker.gui.canvas import Canvas
-from homelab_maker.model import InterfaceMode, Project
+from homelab_maker.model import (
+    InterfaceMode,
+    Project,
+    Protocol,
+    Rule,
+    RuleAction,
+    RuleProtocol,
+    Service,
+    node_routes,
+)
 from homelab_maker.operations import (
     add_interface,
+    add_rule,
+    add_service,
     disconnect,
+    move_rule,
     remove_interface,
+    remove_rule,
+    remove_service,
     rename_interface,
+    replace_rule,
+    replace_service,
     set_addresses,
     set_mode,
     set_trunk_vlans,
     set_vlan,
 )
-from homelab_maker.viewmodel import link_summary, port_rows
+from homelab_maker.viewmodel import link_summary, port_rows, reference_label
 
 PORT, ADDRESSES, MODE, VLAN, TAGGED, CABLE = range(6)
 _HEADERS = ["Port", "Addresses", "Mode", "VLAN", "Tagged VLANs", "Cable to"]
+SERVICE_NAME, SERVICE_PORT, SERVICE_PROTOCOL = range(3)
+RULE_ACTION, RULE_FROM, RULE_TO, RULE_PROTOCOL, RULE_PORT = range(5)
 
 
 class Inspector(QWidget):
@@ -92,11 +113,22 @@ class Inspector(QWidget):
         buttons = QHBoxLayout()
         for button in (self.add_port_button, self.remove_port_button, self.disconnect_button):
             buttons.addWidget(button)
+        ports_page = QWidget()
+        ports_layout = QVBoxLayout(ports_page)
+        ports_layout.setContentsMargins(0, 6, 0, 0)
+        ports_layout.addWidget(self.ports, 1)
+        ports_layout.addLayout(buttons)
+
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName("node-tabs")
+        self.tabs.addTab(ports_page, "Ports")
+        self.tabs.addTab(self._build_services(), "Services")
+        self.tabs.addTab(self._build_rules(), "Rules")
+
         layout = QVBoxLayout(self)
         layout.addWidget(self.title)
         layout.addWidget(self.subtitle)
-        layout.addWidget(self.ports, 1)
-        layout.addLayout(buttons)
+        layout.addWidget(self.tabs, 1)
         layout.addWidget(self.cable_text)
         layout.addWidget(self.remove_cable_button)
         layout.addStretch(0)
@@ -104,6 +136,63 @@ class Inspector(QWidget):
         self.document.subscribe(self.refresh)
         self.canvas.selection_changed.connect(self.refresh)
         self.refresh()
+
+    def _table(self, headers: list[str], name: str) -> QTableWidget:
+        table = QTableWidget(0, len(headers))
+        table.setObjectName(name)
+        table.setHorizontalHeaderLabels(headers)
+        table.verticalHeader().setVisible(False)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        table.horizontalHeader().setStretchLastSection(True)
+        return table
+
+    def _page(self, table: QTableWidget, *buttons: QPushButton) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 6, 0, 0)
+        layout.addWidget(table, 1)
+        row = QHBoxLayout()
+        for button in buttons:
+            row.addWidget(button)
+        layout.addLayout(row)
+        return page
+
+    def _build_services(self) -> QWidget:
+        self.services = self._table(["Service", "Port", "Protocol"], "services")
+        self.services.itemChanged.connect(self._service_changed)
+        self.add_service_button = QPushButton("Add service")
+        self.add_service_button.clicked.connect(self.add_service_row)
+        self.remove_service_button = QPushButton("Remove service")
+        self.remove_service_button.clicked.connect(self.remove_service_row)
+        return self._page(self.services, self.add_service_button, self.remove_service_button)
+
+    def _build_rules(self) -> QWidget:
+        self.rules = self._table(["Action", "From", "To", "Protocol", "Port"], "rules")
+        self.rules.itemChanged.connect(self._rule_changed)
+        self.add_rule_button = QPushButton("Add rule")
+        self.add_rule_button.clicked.connect(self.add_rule_row)
+        self.remove_rule_button = QPushButton("Remove rule")
+        self.remove_rule_button.clicked.connect(self.remove_rule_row)
+        self.rule_up_button = QPushButton("Move up")
+        self.rule_up_button.clicked.connect(lambda: self.move_rule_row(-1))
+        self.rule_down_button = QPushButton("Move down")
+        self.rule_down_button.clicked.connect(lambda: self.move_rule_row(1))
+        note = QLabel(
+            "Rules are tried from the top and the first that fits decides. "
+            "A flow that no rule mentions is allowed."
+        )
+        note.setWordWrap(True)
+        page = self._page(
+            self.rules,
+            self.add_rule_button,
+            self.remove_rule_button,
+            self.rule_up_button,
+            self.rule_down_button,
+        )
+        page.layout().addWidget(note)  # type: ignore[union-attr]
+        return page
 
     # ----------------------------------------------------------------------- showing
 
@@ -117,13 +206,7 @@ class Inspector(QWidget):
         node = project.node(node_id) if node_id else None
         link_id = self.canvas.selected_link
 
-        for widget in (
-            self.ports,
-            self.add_port_button,
-            self.remove_port_button,
-            self.disconnect_button,
-        ):
-            widget.setVisible(node is not None)
+        self.tabs.setVisible(node is not None)
         self.cable_text.setVisible(link_id is not None and node is None)
         self.remove_cable_button.setVisible(link_id is not None and node is None)
 
@@ -134,6 +217,9 @@ class Inspector(QWidget):
             where = f"inside {host.name}" if host else "on the canvas"
             self.subtitle.setText(f"{kind.label if kind else node.kind}, {where}")
             self._fill_ports(project, node.id)
+            self._fill_services(node.id)
+            self._fill_rules(node.id)
+            self.tabs.setTabVisible(2, node_routes(node))
         elif link_id is not None:
             self.title.setText("Cable")
             self.subtitle.setText("")
@@ -178,6 +264,73 @@ class Inspector(QWidget):
                 self.ports.selectRow(keep)
         finally:
             self._filling = False
+
+    def _fill_services(self, node_id: str) -> None:
+        node = self.document.project.node(node_id)
+        services = node.services if node else ()
+        self._filling = True
+        try:
+            self.services.setRowCount(len(services))
+            for row, service in enumerate(services):
+                self.services.setItem(row, SERVICE_NAME, QTableWidgetItem(service.name))
+                self.services.setItem(row, SERVICE_PORT, QTableWidgetItem(str(service.port)))
+                self.services.setCellWidget(
+                    row,
+                    SERVICE_PROTOCOL,
+                    self._choice(Protocol, service.protocol.value, row, "service"),
+                )
+        finally:
+            self._filling = False
+        self.remove_service_button.setEnabled(bool(services))
+
+    def _fill_rules(self, node_id: str) -> None:
+        project = self.document.project
+        node = project.node(node_id)
+        rules = node.rules if node else ()
+        self._filling = True
+        try:
+            self.rules.setRowCount(len(rules))
+            for row, rule in enumerate(rules):
+                self.rules.setCellWidget(
+                    row,
+                    RULE_ACTION,
+                    self._choice(RuleAction, rule.action.value, row, "rule-action"),
+                )
+                self.rules.setItem(
+                    row, RULE_FROM, QTableWidgetItem(reference_label(project, rule.source))
+                )
+                self.rules.setItem(
+                    row, RULE_TO, QTableWidgetItem(reference_label(project, rule.destination))
+                )
+                self.rules.setCellWidget(
+                    row,
+                    RULE_PROTOCOL,
+                    self._choice(RuleProtocol, rule.protocol.value, row, "rule-protocol"),
+                )
+                self.rules.setItem(
+                    row, RULE_PORT, QTableWidgetItem("" if rule.port is None else str(rule.port))
+                )
+        finally:
+            self._filling = False
+        for button in (self.remove_rule_button, self.rule_up_button, self.rule_down_button):
+            button.setEnabled(bool(rules))
+
+    def _choice(self, options: type, current: str, row: int, kind: str) -> QComboBox:
+        box = QComboBox()
+        box.setObjectName(f"{kind}-{row}")
+        for option in options:  # type: ignore[attr-defined]
+            box.addItem(option.value)
+        box.setCurrentText(current)
+        box.currentTextChanged.connect(lambda _text, r=row, k=kind: self._choice_made(k, r))
+        return box
+
+    def _choice_made(self, kind: str, row: int) -> None:
+        if self._filling:
+            return
+        if kind == "service":
+            self._service_changed_row(row)
+        else:
+            self._rule_changed_row(row)
 
     def _mode_box(self, port: str, mode: str) -> QComboBox:
         box = QComboBox()
@@ -252,6 +405,88 @@ class Inspector(QWidget):
             return
         self._edit("Change port mode", lambda p: set_mode(p, node_id, port, InterfaceMode(text)))
 
+    def _cell(self, table: QTableWidget, row: int, column: int) -> str:
+        item = table.item(row, column)
+        return item.text() if item is not None else ""
+
+    def _combo(self, table: QTableWidget, row: int, column: int) -> str:
+        widget = table.cellWidget(row, column)
+        return widget.currentText() if isinstance(widget, QComboBox) else ""
+
+    def _service_changed(self, item: QTableWidgetItem) -> None:
+        if not self._filling:
+            self._service_changed_row(item.row())
+
+    def _service_changed_row(self, row: int) -> None:
+        node_id = self.shown_node()
+        if node_id is None:
+            return
+
+        def change(project: Project) -> Project:
+            service = Service(
+                self._cell(self.services, row, SERVICE_NAME).strip(),
+                _port_number(self._cell(self.services, row, SERVICE_PORT)),
+                Protocol(self._combo(self.services, row, SERVICE_PROTOCOL)),
+            )
+            return replace_service(project, node_id, row, service)
+
+        self._edit("Change service", change)
+
+    def add_service_row(self) -> None:
+        node_id = self.shown_node()
+        if node_id is None:
+            return
+        node = self.document.project.node(node_id)
+        taken = {s.port for s in node.services} if node else set()
+        port = next(p for p in range(8080, 65535) if p not in taken)
+        self._edit("Add service", lambda p: add_service(p, node_id, "New service", port))
+
+    def remove_service_row(self) -> None:
+        node_id, row = self.shown_node(), self.services.currentRow()
+        if node_id is None or row < 0:
+            return
+        self._edit("Remove service", lambda p: remove_service(p, node_id, row))
+
+    def _rule_changed(self, item: QTableWidgetItem) -> None:
+        if not self._filling:
+            self._rule_changed_row(item.row())
+
+    def _rule_changed_row(self, row: int) -> None:
+        node_id = self.shown_node()
+        if node_id is None:
+            return
+
+        def change(project: Project) -> Project:
+            rule = Rule(
+                RuleAction(self._combo(self.rules, row, RULE_ACTION)),
+                parse_reference(project, self._cell(self.rules, row, RULE_FROM)),
+                parse_reference(project, self._cell(self.rules, row, RULE_TO)),
+                RuleProtocol(self._combo(self.rules, row, RULE_PROTOCOL)),
+                parse_port(self._cell(self.rules, row, RULE_PORT)),
+            )
+            return replace_rule(project, node_id, row, rule)
+
+        self._edit("Change rule", change)
+
+    def add_rule_row(self) -> None:
+        node_id = self.shown_node()
+        if node_id is None:
+            return
+        self._edit("Add rule", lambda p: add_rule(p, node_id, Rule(RuleAction.ALLOW)))
+
+    def remove_rule_row(self) -> None:
+        node_id, row = self.shown_node(), self.rules.currentRow()
+        if node_id is None or row < 0:
+            return
+        self._edit("Remove rule", lambda p: remove_rule(p, node_id, row))
+
+    def move_rule_row(self, delta: int) -> None:
+        node_id, row = self.shown_node(), self.rules.currentRow()
+        if node_id is None or row < 0:
+            return
+        self._edit("Move rule", lambda p: move_rule(p, node_id, row, delta))
+        self.rules.selectRow(row + delta)
+
     def add_port(self) -> None:
         node_id = self.shown_node()
         if node_id is None:
@@ -269,3 +504,10 @@ class Inspector(QWidget):
         if not links:
             return
         self.document.apply(disconnect(self.document.project, links), "Remove cable")
+
+
+def _port_number(text: str) -> int:
+    number = parse_port(text)
+    if number is None:
+        raise ValueError("a service needs a port number")
+    return number

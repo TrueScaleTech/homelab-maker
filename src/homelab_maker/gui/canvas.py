@@ -9,7 +9,7 @@ import math
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QLineF, QPoint, QPointF, QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QLineF, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QContextMenuEvent,
@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 
 from homelab_maker.catalog import CATALOG
 from homelab_maker.document import Document
-from homelab_maker.grid import CELL, cell_at, cell_origin, clamp_zoom, snap
+from homelab_maker.grid import CELL, cell_at, cell_origin, clamp_zoom, point_along, snap
 from homelab_maker.gui.icons import paint_kind
 from homelab_maker.gui.palette import MIME_KIND
 from homelab_maker.gui.theme import Tokens
@@ -52,7 +52,7 @@ from homelab_maker.operations import (
     move_out,
     rename_node,
 )
-from homelab_maker.viewmodel import drawn_links, inside_count
+from homelab_maker.viewmodel import drawn_links, inside_count, path_cards, shown_as
 
 # The card is a little smaller than its cell, so neighbours never touch.
 CARD = 96
@@ -79,6 +79,8 @@ class NodeItem(QGraphicsItem):
         self.kind = ""
         self.name = ""
         self.inside = 0
+        # Drawn faded and crossed out while "what goes down" is showing.
+        self.offline = False
         self._canvas = canvas
         self.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable
@@ -102,6 +104,8 @@ class NodeItem(QGraphicsItem):
         tokens = self._canvas.tokens
         card = QRectF(MARGIN, MARGIN, CARD, CARD)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.offline:
+            painter.setOpacity(0.4)
         selected = self.isSelected()
         painter.setPen(
             QPen(QColor(tokens.accent if selected else tokens.card_border), 2.5 if selected else 1)
@@ -135,6 +139,13 @@ class NodeItem(QGraphicsItem):
                 Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
                 f"{self.inside} inside",
             )
+        if self.offline:
+            painter.setOpacity(1.0)
+            painter.setPen(
+                QPen(QColor(tokens.danger), 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+            )
+            painter.drawLine(card.topLeft() + QPointF(8, 8), card.bottomRight() - QPointF(8, 8))
+            painter.drawLine(card.topRight() + QPointF(-8, 8), card.bottomLeft() + QPointF(8, -8))
 
     def itemChange(self, change: QGraphicsItem.GraphicsItemChange, value: Any) -> Any:
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
@@ -201,6 +212,8 @@ class Backdrop(QGraphicsItem):
             )
             painter.drawLine(a.center(), b.center())
 
+        canvas.paint_flow(painter)
+
         pending = canvas.pending_cable()
         if pending is not None:
             start, end = pending
@@ -237,6 +250,14 @@ class Canvas(QGraphicsView):
         self._cable_from: str | None = None
         self._cable_press: str | None = None
         self._cable_cursor: QPointF | None = None
+        # A flow being shown: the devices on its path, whether it gets through, where it stops.
+        self._flow: tuple[tuple[str, ...], bool, str | None] | None = None
+        self._packet = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(33)
+        self._timer.timeout.connect(self.advance_packet)
+        # Devices drawn as switched off ("what goes down").
+        self.offline: frozenset[str] = frozenset()
 
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
@@ -323,6 +344,7 @@ class Canvas(QGraphicsView):
                 scene.addItem(item)
             item.kind, item.name = node.kind, node.name
             item.inside = inside_count(project, node.id)
+            item.offline = node.id in self.offline
             x, y = cell_origin(node.x, node.y)
             if item.pos() != QPointF(x, y):
                 item.setPos(x, y)
@@ -574,6 +596,115 @@ class Canvas(QGraphicsView):
         else:
             self.refresh()  # the cards snap back to where the document says they are
             self.status_message.emit("That cell is taken.")
+
+    # ------------------------------------------------------------------- flows and outages
+
+    def show_flow(self, path: tuple[str, ...], ok: bool, stopped: str | None = None) -> None:
+        """Draw a path over the cards: green when the flow gets through, red when it does not."""
+        self._flow = (path, ok, stopped)
+        self._packet = 0.0
+        self._backdrop.update()
+
+    def clear_flow(self) -> None:
+        self._flow = None
+        self.play_packet(False)
+        self._backdrop.update()
+
+    @property
+    def flow_shown(self) -> bool:
+        return self._flow is not None
+
+    def flow_points(self) -> list[QPointF]:
+        """The centres of the cards the shown path passes through, in this view."""
+        if self._flow is None:
+            return []
+        cards = path_cards(self.document.project, self.view, self._flow[0])
+        return [self.node_items[c].center() for c in cards if c in self.node_items]
+
+    def play_packet(self, on: bool) -> None:
+        """Send a dot along the shown path, over and over, or stop it."""
+        if on and self._flow is not None:
+            self._timer.start()
+        else:
+            self._timer.stop()
+        self._backdrop.update()
+
+    @property
+    def packet_playing(self) -> bool:
+        return self._timer.isActive()
+
+    def advance_packet(self, step: float = 0.02) -> None:
+        self._packet = (self._packet + step) % 1.0
+        self._backdrop.update()
+
+    def packet_position(self) -> QPointF | None:
+        points = self.flow_points()
+        if not points or not self._timer.isActive():
+            return None
+        x, y = point_along([(p.x(), p.y()) for p in points], self._packet)
+        return QPointF(x, y)
+
+    def paint_flow(self, painter: QPainter) -> None:
+        if self._flow is None:
+            return
+        _, ok, stopped = self._flow
+        tokens = self.tokens
+        colour = QColor(tokens.ok if ok else tokens.danger)
+        points = self.flow_points()
+        if len(points) > 1:
+            glow = QColor(colour)
+            glow.setAlpha(90)
+            painter.setPen(
+                QPen(
+                    glow,
+                    9,
+                    Qt.PenStyle.SolidLine,
+                    Qt.PenCapStyle.RoundCap,
+                    Qt.PenJoinStyle.RoundJoin,
+                )
+            )
+            painter.drawPolyline(points)
+            painter.setPen(
+                QPen(
+                    colour,
+                    3,
+                    Qt.PenStyle.SolidLine,
+                    Qt.PenCapStyle.RoundCap,
+                    Qt.PenJoinStyle.RoundJoin,
+                )
+            )
+            painter.drawPolyline(points)
+        where = self.stop_point(stopped)
+        if where is not None:
+            painter.setPen(QPen(QColor(tokens.danger), 3))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(where, 30, 30)
+            painter.drawLine(where + QPointF(-12, -12), where + QPointF(12, 12))
+            painter.drawLine(where + QPointF(12, -12), where + QPointF(-12, 12))
+        packet = self.packet_position()
+        if packet is not None:
+            painter.setPen(QPen(QColor(tokens.card), 2))
+            painter.setBrush(colour)
+            painter.drawEllipse(packet, 7, 7)
+
+    def stop_point(self, stopped: str | None) -> QPointF | None:
+        """Where a blocked flow stops: on a device's card, or in the middle of a cable."""
+        if stopped is None:
+            return None
+        project = self.document.project
+        link = next((item for item in project.links if item.id == stopped), None)
+        if link is not None:
+            a = self.node_items.get(shown_as(project, link.a.node, self.view) or "")
+            b = self.node_items.get(shown_as(project, link.b.node, self.view) or "")
+            return (a.center() + b.center()) / 2 if a and b else None
+        card = shown_as(project, stopped, self.view)
+        item = self.node_items.get(card) if card else None
+        return item.center() if item else None
+
+    def set_offline(self, node_ids: frozenset[str]) -> None:
+        """Draw these devices as switched off. An empty set puts everything back."""
+        self.offline = node_ids
+        self.refresh()
 
     # ------------------------------------------------------------------------ cables
 
