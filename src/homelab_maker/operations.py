@@ -5,7 +5,7 @@ undo is simply "go back to the previous project". An operation that cannot be do
 raises ``ValueError`` and leaves the project as it was.
 """
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from dataclasses import replace
 
 from homelab_maker.catalog import CATALOG
@@ -14,6 +14,7 @@ from homelab_maker.model import (
     PHYSICAL_MEDIA,
     Endpoint,
     Interface,
+    InterfaceMode,
     Link,
     Medium,
     Node,
@@ -376,3 +377,73 @@ def add_interface(project: Project, node_id: str, name: str | None = None) -> tu
         raise ValueError(f"{node.name} already has a port named {name!r}")
     updated = replace(node, interfaces=(*node.interfaces, Interface(name)))
     return replace_node(project, updated), name
+
+
+# ---------------------------------------------------------------- interface settings
+
+
+def _change_interface(project: Project, node_id: str, current: str, **changes: object) -> Project:
+    """The project with one interface of one node rebuilt with the given fields changed."""
+    node = project.node(node_id)
+    if node is None:
+        raise ValueError(f"there is no node {node_id!r}")
+    found = next((i for i in node.interfaces if i.name == current), None)
+    if found is None:
+        raise ValueError(f"{node.name} has no port {current!r}")
+    # Building the interface checks it, so a bad value raises before anything is changed.
+    changed = replace(found, **changes)  # type: ignore[arg-type]
+    interfaces = tuple(changed if i.name == current else i for i in node.interfaces)
+    return replace_node(project, replace(node, interfaces=interfaces))
+
+
+def set_addresses(
+    project: Project, node_id: str, interface: str, addresses: Sequence[str]
+) -> Project:
+    return _change_interface(project, node_id, interface, addresses=tuple(addresses))
+
+
+def set_vlan(project: Project, node_id: str, interface: str, vlan: int | None) -> Project:
+    return _change_interface(project, node_id, interface, vlan=vlan)
+
+
+def set_mode(project: Project, node_id: str, interface: str, mode: InterfaceMode) -> Project:
+    """Switch a port between access and trunk. An access port carries no tagged VLANs."""
+    if mode is InterfaceMode.ACCESS:
+        return _change_interface(project, node_id, interface, mode=mode, trunk_vlans=())
+    return _change_interface(project, node_id, interface, mode=mode)
+
+
+def set_trunk_vlans(
+    project: Project, node_id: str, interface: str, vlans: Sequence[int]
+) -> Project:
+    return _change_interface(project, node_id, interface, trunk_vlans=tuple(vlans))
+
+
+def rename_interface(project: Project, node_id: str, old: str, new: str) -> Project:
+    """Rename a port, and the links that end on it."""
+    node = project.node(node_id)
+    if node is None:
+        raise ValueError(f"there is no node {node_id!r}")
+    new = new.strip()
+    if new != old and any(i.name == new for i in node.interfaces):
+        raise ValueError(f"{node.name} already has a port named {new!r}")
+    renamed = _change_interface(project, node_id, old, name=new)
+
+    def moved(end: Endpoint) -> Endpoint:
+        return Endpoint(node_id, new) if end == Endpoint(node_id, old) else end
+
+    links = tuple(replace(link, a=moved(link.a), b=moved(link.b)) for link in renamed.links)
+    return replace(renamed, links=links)
+
+
+def remove_interface(project: Project, node_id: str, name: str) -> Project:
+    """Remove a port. A port with a link on it stays until the link is removed."""
+    node = project.node(node_id)
+    if node is None:
+        raise ValueError(f"there is no node {node_id!r}")
+    if all(i.name != name for i in node.interfaces):
+        raise ValueError(f"{node.name} has no port {name!r}")
+    if interface_links(project, node_id, name):
+        raise ValueError(f"{name} of {node.name} has a cable; remove the cable first")
+    kept = tuple(i for i in node.interfaces if i.name != name)
+    return replace_node(project, replace(node, interfaces=kept))
