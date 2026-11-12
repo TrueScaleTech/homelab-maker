@@ -69,7 +69,7 @@ This is a sketch, not an interface. Names will settle while the model is written
 - **Flow**: a statement that one node talks to a service of another, over a protocol
   and a port.
 - **Rule**: a simplified allow or deny entry on a node that forwards traffic (a
-  firewall, a router with access lists, a virtual machine that runs a firewall). Source
+  firewall, or a router with access lists). Source
   and destination are `any`, a network, or a node; the first matching rule wins.
 
 ### Two kinds of check
@@ -80,18 +80,46 @@ This is a sketch, not an interface. Names will settle while the model is written
   analysis relies on them. They are implemented in `validation.py`.
 - **Design checks** are warnings about the homelab itself: duplicate addresses, a VLAN
   that is not carried by a trunk, a single point of failure. They never block a project.
-  They arrive in M4.
+  They are in `checks.py`.
 
-### Reachability, first version
+### Reachability
 
 A flow from A to B is *reachable* when a path of links exists from A to B, the VLAN
-membership of every interface on the path allows the traffic to cross it, every
-routing hop is a node that routes, and no rule on the path denies it. The result
-carries the path, and for a blocked flow it names the first thing that stops it.
+membership of every interface on the path allows the traffic to cross it, every routing
+hop is a node that routes, no rule on the path denies it, and the destination lists a
+service on the port. The result carries the path, and for a blocked flow it names the first
+thing that stops it.
 
-Deliberately not modelled in the first version: NAT, dynamic routing protocols, ARP
-and DHCP behaviour, bandwidth and latency, wireless roaming, and the state of a real
-firewall's connection table. The application lists these next to every result.
+How the pieces behave:
+
+- A switch, an access point and a modem carry traffic between their ports without changing
+  its VLAN. A router or firewall carries it between networks, and the VLAN may change
+  there. Any other device is only the start or the end of a path.
+- A port carries its untagged VLAN (the default VLAN, 1, when none is set), and, if it is a
+  trunk, the tagged VLANs it lists. A link carries traffic only if both of its ports do.
+  A tunnel link is not tied to a VLAN.
+- A virtual machine or container is attached to its host without a cable. Its traffic
+  leaves through the host's ports and traffic for it arrives through them. A guest with no
+  VLAN set follows its host.
+- A device that routes applies its rules in order to traffic passing through it, first
+  match wins, and allows what no rule matches. Rules never apply to traffic that starts or
+  ends on the device itself.
+- If several paths exist, the shortest one that no rule denies is the answer. If all are
+  denied, the shortest is shown, with the rule that stops it.
+- If the destination lists no services, the port is not checked and the answer says so.
+
+Deliberately not modelled: NAT and port forwarding, dynamic routing and routing tables
+(a router is assumed to reach every network it touches), ARP, DHCP and DNS, return traffic
+(a reply is assumed to be allowed), bandwidth and latency, wireless roaming, the state of a
+real firewall, and a virtual machine that itself routes (it is not placed on a path between
+other devices). The window lists these next to every result.
+
+### What goes down
+
+Switching a device off removes it and everything inside it from the drawing, runs the same
+analysis, and reports the flows that worked and no longer do, and the devices that still run
+but have lost their way to the Internet (or, without an Internet device, to the largest
+group that is left). Nothing in the project changes.
 
 ## Project file
 
@@ -111,13 +139,14 @@ first and replaces the old one only when the new one is complete.
 
 | Milestone | Content |
 | --- | --- |
-| **M0** | This page, repository scaffold, tooling, CI, git identity. |
+| **M0** (done) | This page, repository scaffold, tooling, CI, git identity. |
 | **M1** (done) | Catalogue, model, structural checks and project file, pure and tested. No window. An invented example project ships in `examples/`. |
 | **M2** (done) | The canvas: grid, placing devices from the catalogue, moving, selecting, renaming, deleting, undo and redo, save and load, zoom and pan, light and dark themes. A Windows build script and a release workflow whose packaged program checks itself (`--smoke-test`) before anything is attached to a draft pre-release. |
-| **M3** | Nesting (host, virtual machine, container, service), ports and links. |
-| **M4** | Interfaces, addresses, VLANs, and the automatic checks (duplicate addresses, ports over capacity, trunk and VLAN mismatches). |
-| **M5** | Flows, reachability analysis, the "what goes down" view, and the animation of a packet along its path. |
-| **M6** | Export (PNG, SVG, Markdown, draw.io), documentation, installer, privacy audit and release checklist. |
+| **M3** (done) | Nesting drawn on the canvas (open a host, drop a card into one), cables you can draw, a details panel with the ports of a device. |
+| **M4** (done) | Addresses, VLANs and trunks in the details panel, and the automatic checks (duplicate addresses, VLAN and subnet mismatches, unreachable devices, single points of failure). |
+| **M5** (done) | Flows, reachability analysis, services and rules, the "what goes down" view, and the packet along a path. |
+| **M6** (done) | Export (PNG, SVG, Markdown, draw.io), Windows installer, Linux AppImage, `.deb` and archive, privacy audit, release checklist. |
 
-Roadmap, after the first release: rack view in U units, power draw and yearly cost,
-import of a Discovery Now export, import of a `docker-compose.yml`.
+After the first release: see [evolutions.md](evolutions.md) for ideas, among them a rack view
+in U units, power draw and yearly cost, and imports of a Discovery Now export and of a
+`docker-compose.yml`.

@@ -159,6 +159,20 @@ class Inspector(QWidget):
         layout.addLayout(row)
         return page
 
+    @staticmethod
+    def _clear_widgets(table: QTableWidget) -> None:
+        """Take the combo boxes out of a table before it is refilled.
+
+        Qt deletes them later, and until it does they would still be drawn over the new rows.
+        """
+        for row in range(table.rowCount()):
+            for column in range(table.columnCount()):
+                widget = table.cellWidget(row, column)
+                if widget is not None:
+                    widget.hide()
+                    table.removeCellWidget(row, column)
+                    widget.deleteLater()
+
     def _build_services(self) -> QWidget:
         self.services = self._table(["Service", "Port", "Protocol"], "services")
         self.services.itemChanged.connect(self._service_changed)
@@ -237,6 +251,7 @@ class Inspector(QWidget):
         self._filling = True
         try:
             rows = port_rows(project, node_id)
+            self._clear_widgets(self.ports)
             self.ports.setRowCount(len(rows))
             for index, row in enumerate(rows):
                 trunk = row.mode == InterfaceMode.TRUNK.value
@@ -270,6 +285,7 @@ class Inspector(QWidget):
         services = node.services if node else ()
         self._filling = True
         try:
+            self._clear_widgets(self.services)
             self.services.setRowCount(len(services))
             for row, service in enumerate(services):
                 self.services.setItem(row, SERVICE_NAME, QTableWidgetItem(service.name))
@@ -289,6 +305,7 @@ class Inspector(QWidget):
         rules = node.rules if node else ()
         self._filling = True
         try:
+            self._clear_widgets(self.rules)
             self.rules.setRowCount(len(rules))
             for row, rule in enumerate(rules):
                 self.rules.setCellWidget(

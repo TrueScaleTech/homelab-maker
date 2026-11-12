@@ -96,6 +96,7 @@ def main(output: Path, font_file: Path | None) -> None:
 
     reset()
     window.canvas.select_ids({"switch"})
+    window.inspector.tabs.setCurrentIndex(0)
     outage = what_goes_down(window.document.project, ["switch"])
     window.canvas.set_offline(frozenset(outage.stopped))
     window.checks_dock.raise_()

@@ -32,6 +32,8 @@ CI runs the same four on Linux and Windows, for Python 3.11, 3.12 and 3.13.
 - **Tests** come with behaviour. The suite needs neither a network nor a screen: the
   model and the analysis are plain Python, and the window is tested on Qt's `offscreen`
   platform by simulating real clicks and drags, not by calling internal methods.
+- **Break it on purpose.** When you add a rule to the analysis, change the code so the
+  rule is wrong and check that a test fails. A test that cannot fail proves nothing.
 - **A bug becomes a test.** Write the test first and watch it fail.
 - **Keep decisions out of widgets.** The model, the analysis and the view-models do not
   import Qt. The widgets only draw what they decided.
@@ -42,16 +44,25 @@ CI runs the same four on Linux and Windows, for Python 3.11, 3.12 and 3.13.
 - `model.py`, `catalog.py`, `validation.py`, `storage.py`: the homelab as immutable values,
   what each kind of device is, the consistency rules, and the project file. No Qt.
 - `operations.py`, `document.py`: every edit is a pure function from one project to
-  another, and the document keeps the undo history. No Qt.
-- `viewmodel.py`, `grid.py`, `settings.py`: what the window says and where things sit. No Qt.
+  another (placing, moving, nesting, cabling, ports, services, rules, flows, zones), and the
+  document keeps the undo history. No Qt.
+- `checks.py`: warnings about the design (duplicate addresses, VLAN mismatches, single
+  points of failure). No Qt.
+- `reachability.py`, `outage.py`: whether a flow gets through and what stops it, and what
+  goes down when something is switched off. No Qt.
+- `export.py`, `fields.py`, `viewmodel.py`, `grid.py`, `settings.py`: the Markdown and
+  draw.io writers, what is typed turned into values, what the window says and where things
+  sit, and the preferences. No Qt.
 - `gui/`: the window. `theme.py` holds every colour (as plain strings, so contrast is
   tested), `icons.py` draws every icon on one 24-unit grid, `canvas.py` turns gestures into
-  calls to `operations`, `main_window.py` owns the menus and the files.
+  calls to `operations`, `inspector.py`, `flows.py` and `findings.py` are the panels, and
+  `main_window.py` owns the menus and the files.
 
 Put a new decision in the modules without Qt, and keep the widgets a layer that draws it.
 Never hard-code a colour in a widget: one of the two themes will go wrong and the contrast
 tests will not be watching it. Add an icon in `gui/icons.py` rather than reaching for a
-character from a font.
+character from a font. `tests/test_privacy.py` fails if a module imports anything that can
+open a connection or run a program.
 
 ## Testing the window
 

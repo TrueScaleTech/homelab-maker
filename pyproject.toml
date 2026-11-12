@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 authors = [{ name = "TrueScaleTech" }]
 keywords = ["homelab", "network", "diagram", "topology", "planning", "desktop"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Environment :: X11 Applications :: Qt",
     "Environment :: Win32 (MS Windows)",
     "Intended Audience :: System Administrators",

@@ -475,3 +475,12 @@ def test_press_move_release_helpers_agree_with_a_plain_click(window: MainWindow)
     release(canvas, pos + QPoint(2, 2))
     assert canvas.selected_ids() == ["nas"]
     assert positions(window) == {"nas": (1, 1)}
+
+
+def test_fit_does_not_blow_a_single_device_up_to_fill_the_window(window: MainWindow) -> None:
+    from homelab_maker.gui.canvas import FIT_ZOOM_MAX
+
+    window.canvas.add_device("nas", 0, 0)
+    window.canvas.zoom_fit()
+    assert window.canvas.zoom <= FIT_ZOOM_MAX
+    assert window.canvas.zoom == pytest.approx(window.canvas.transform().m11())

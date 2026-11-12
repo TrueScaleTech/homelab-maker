@@ -57,6 +57,9 @@ from homelab_maker.operations import (
 )
 from homelab_maker.viewmodel import drawn_links, inside_count, path_cards, shown_as
 
+# "Fit everything" never zooms in further than this.
+FIT_ZOOM_MAX = 1.25
+
 # The card is a little smaller than its cell, so neighbours never touch.
 CARD = 96
 MARGIN = (CELL - CARD) / 2
@@ -934,7 +937,8 @@ class Canvas(QGraphicsView):
         self.fitInView(
             bounds.adjusted(-CELL, -CELL, CELL, CELL), Qt.AspectRatioMode.KeepAspectRatio
         )
-        self._zoom = clamp_zoom(self.transform().m11(), 1.0)
+        # A handful of devices would otherwise be blown up to fill the window.
+        self._zoom = min(clamp_zoom(self.transform().m11(), 1.0), FIT_ZOOM_MAX)
         if self._zoom != self.transform().m11():
             self.resetTransform()
             self.scale(self._zoom, self._zoom)

@@ -11,20 +11,19 @@ version, and how serious you think it is.
 
 ## Status
 
-HomeLabMaker is pre-alpha and has no application yet. What follows are the
-commitments the application is being built to keep. They are written down first so
-that the code, and its tests, are held to them. Each one will be checked against the
-code before the first release.
+HomeLabMaker 0.1.0 is the first release. The commitments below were written before the code
+and have been checked against it for this release; where a check can be automated it is a
+test, named here.
 
 ## What the application does, and does not do
 
-It will:
+It does:
 
 - open and save project files that you choose, and keep its own settings in your
   user configuration folder;
 - draw and analyse the model you built.
 
-It will not:
+It does not:
 
 - make any network connection of its own, scan a network or probe a device;
 - connect to, configure or change any real device;
