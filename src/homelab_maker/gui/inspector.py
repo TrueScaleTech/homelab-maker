@@ -1,12 +1,16 @@
-"""The details panel: what the selected device or cable is made of.
+"""The details panel: what the selected device or cable is made of, and where to change it.
 
-Like the canvas it decides nothing. It lists what ``viewmodel`` returns and turns a button
-into a call to ``operations`` through the document.
+Like the canvas it decides nothing. It lists what ``viewmodel`` returns, turns what is typed
+into values with ``fields``, and hands the change to ``operations`` through the document. A
+value that is refused is explained in the status bar and the cell goes back to what it was.
 """
+
+from collections.abc import Callable
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -19,11 +23,29 @@ from PySide6.QtWidgets import (
 
 from homelab_maker.catalog import CATALOG
 from homelab_maker.document import Document
+from homelab_maker.fields import (
+    format_addresses,
+    format_vlans,
+    parse_addresses,
+    parse_vlan,
+    parse_vlans,
+)
 from homelab_maker.gui.canvas import Canvas
-from homelab_maker.operations import add_interface, disconnect
+from homelab_maker.model import InterfaceMode, Project
+from homelab_maker.operations import (
+    add_interface,
+    disconnect,
+    remove_interface,
+    rename_interface,
+    set_addresses,
+    set_mode,
+    set_trunk_vlans,
+    set_vlan,
+)
 from homelab_maker.viewmodel import link_summary, port_rows
 
-_PORT, _CABLE = range(2)
+PORT, ADDRESSES, MODE, VLAN, TAGGED, CABLE = range(6)
+_HEADERS = ["Port", "Addresses", "Mode", "VLAN", "Tagged VLANs", "Cable to"]
 
 
 class Inspector(QWidget):
@@ -32,6 +54,8 @@ class Inspector(QWidget):
         self.setObjectName("inspector")
         self.document = document
         self.canvas = canvas
+        # True while the table is being filled, so that filling it is not mistaken for typing.
+        self._filling = False
 
         self.title = QLabel()
         self.title.setObjectName("inspector-title")
@@ -42,20 +66,23 @@ class Inspector(QWidget):
         self.subtitle = QLabel()
         self.subtitle.setWordWrap(True)
 
-        self.ports = QTableWidget(0, 2)
+        self.ports = QTableWidget(0, len(_HEADERS))
         self.ports.setObjectName("ports")
-        self.ports.setHorizontalHeaderLabels(["Port", "Cable to"])
+        self.ports.setHorizontalHeaderLabels(_HEADERS)
         self.ports.verticalHeader().setVisible(False)
         self.ports.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.ports.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.ports.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.ports.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.ports.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.ports.horizontalHeader().setStretchLastSection(True)
+        self.ports.itemChanged.connect(self._item_changed)
+        self.ports.itemSelectionChanged.connect(self._update_buttons)
 
         self.add_port_button = QPushButton("Add port")
         self.add_port_button.clicked.connect(self.add_port)
+        self.remove_port_button = QPushButton("Remove port")
+        self.remove_port_button.clicked.connect(self.remove_selected_port)
         self.disconnect_button = QPushButton("Remove cable")
         self.disconnect_button.clicked.connect(self.remove_selected_cable)
-        self.ports.itemSelectionChanged.connect(self._update_buttons)
 
         self.cable_text = QLabel()
         self.cable_text.setWordWrap(True)
@@ -63,8 +90,8 @@ class Inspector(QWidget):
         self.remove_cable_button.clicked.connect(self.canvas.delete_selected)
 
         buttons = QHBoxLayout()
-        buttons.addWidget(self.add_port_button)
-        buttons.addWidget(self.disconnect_button)
+        for button in (self.add_port_button, self.remove_port_button, self.disconnect_button):
+            buttons.addWidget(button)
         layout = QVBoxLayout(self)
         layout.addWidget(self.title)
         layout.addWidget(self.subtitle)
@@ -90,8 +117,12 @@ class Inspector(QWidget):
         node = project.node(node_id) if node_id else None
         link_id = self.canvas.selected_link
 
-        node_widgets = (self.ports, self.add_port_button, self.disconnect_button)
-        for widget in node_widgets:
+        for widget in (
+            self.ports,
+            self.add_port_button,
+            self.remove_port_button,
+            self.disconnect_button,
+        ):
             widget.setVisible(node is not None)
         self.cable_text.setVisible(link_id is not None and node is None)
         self.remove_cable_button.setVisible(link_id is not None and node is None)
@@ -102,7 +133,7 @@ class Inspector(QWidget):
             host = project.node(node.parent) if node.parent else None
             where = f"inside {host.name}" if host else "on the canvas"
             self.subtitle.setText(f"{kind.label if kind else node.kind}, {where}")
-            self._fill_ports(node.id)
+            self._fill_ports(project, node.id)
         elif link_id is not None:
             self.title.setText("Cable")
             self.subtitle.setText("")
@@ -115,25 +146,61 @@ class Inspector(QWidget):
             )
         self._update_buttons()
 
-    def _fill_ports(self, node_id: str) -> None:
-        rows = port_rows(self.document.project, node_id)
-        self.ports.setRowCount(len(rows))
-        for index, row in enumerate(rows):
-            port = QTableWidgetItem(row.name)
-            port.setData(Qt.ItemDataRole.UserRole, row.links)
-            cable = QTableWidgetItem(row.peers or "—")
-            for item in (port, cable):
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.ports.setItem(index, _PORT, port)
-            self.ports.setItem(index, _CABLE, cable)
+    def _fill_ports(self, project: Project, node_id: str) -> None:
+        keep = self.ports.currentRow()
+        self._filling = True
+        try:
+            rows = port_rows(project, node_id)
+            self.ports.setRowCount(len(rows))
+            for index, row in enumerate(rows):
+                trunk = row.mode == InterfaceMode.TRUNK.value
+                cells = {
+                    PORT: row.name,
+                    ADDRESSES: format_addresses(row.addresses),
+                    VLAN: "" if row.vlan is None else str(row.vlan),
+                    TAGGED: format_vlans(row.tagged),
+                    CABLE: row.peers or "—",
+                }
+                for column, text in cells.items():
+                    item = QTableWidgetItem(text)
+                    editable = column in (PORT, ADDRESSES, VLAN) or (column == TAGGED and trunk)
+                    flags = item.flags()
+                    item.setFlags(
+                        flags | Qt.ItemFlag.ItemIsEditable
+                        if editable
+                        else flags & ~Qt.ItemFlag.ItemIsEditable
+                    )
+                    if column == PORT:
+                        item.setData(Qt.ItemDataRole.UserRole, row.links)
+                    self.ports.setItem(index, column, item)
+                self.ports.setCellWidget(index, MODE, self._mode_box(row.name, row.mode))
+            if 0 <= keep < len(rows):
+                self.ports.selectRow(keep)
+        finally:
+            self._filling = False
+
+    def _mode_box(self, port: str, mode: str) -> QComboBox:
+        box = QComboBox()
+        box.setObjectName(f"mode-{port}")
+        for choice in InterfaceMode:
+            box.addItem(choice.value)
+        box.setCurrentText(mode)
+        box.currentTextChanged.connect(lambda text, name=port: self._mode_chosen(name, text))
+        return box
 
     def _update_buttons(self) -> None:
-        links = self._links_of_selected_port()
-        self.disconnect_button.setEnabled(bool(links))
+        has_port = self._selected_port() is not None
+        self.disconnect_button.setEnabled(bool(self._links_of_selected_port()))
+        self.remove_port_button.setEnabled(has_port)
+
+    def _selected_port(self) -> str | None:
+        row = self.ports.currentRow()
+        item = self.ports.item(row, PORT) if row >= 0 else None
+        return item.text() if item is not None else None
 
     def _links_of_selected_port(self) -> tuple[str, ...]:
         row = self.ports.currentRow()
-        item = self.ports.item(row, _PORT) if row >= 0 else None
+        item = self.ports.item(row, PORT) if row >= 0 else None
         if item is None:
             return ()
         value = item.data(Qt.ItemDataRole.UserRole)
@@ -141,16 +208,61 @@ class Inspector(QWidget):
 
     # ----------------------------------------------------------------------- editing
 
+    def _edit(self, label: str, change: Callable[[Project], Project]) -> None:
+        """Apply a change as one undoable step, or explain why not and show the old value."""
+        try:
+            project = change(self.document.project)
+        except ValueError as exc:
+            self.canvas.status_message.emit(str(exc))
+            self.refresh()
+            return
+        if project == self.document.project:
+            self.refresh()
+            return
+        self.document.apply(project, label)
+
+    def _item_changed(self, item: QTableWidgetItem) -> None:
+        node_id = self.shown_node()
+        port_item = self.ports.item(item.row(), PORT)
+        if self._filling or node_id is None or port_item is None:
+            return
+        # The row's port, as the document knows it: the cell may be the port name itself.
+        names = [row.name for row in port_rows(self.document.project, node_id)]
+        port = names[item.row()] if item.row() < len(names) else port_item.text()
+        text = item.text()
+        column = item.column()
+        if column == PORT:
+            self._edit("Rename port", lambda p: rename_interface(p, node_id, port, text))
+        elif column == ADDRESSES:
+            self._edit(
+                "Change addresses",
+                lambda p: set_addresses(p, node_id, port, parse_addresses(text)),
+            )
+        elif column == VLAN:
+            self._edit("Change VLAN", lambda p: set_vlan(p, node_id, port, parse_vlan(text)))
+        elif column == TAGGED:
+            self._edit(
+                "Change tagged VLANs",
+                lambda p: set_trunk_vlans(p, node_id, port, parse_vlans(text)),
+            )
+
+    def _mode_chosen(self, port: str, text: str) -> None:
+        node_id = self.shown_node()
+        if self._filling or node_id is None:
+            return
+        self._edit("Change port mode", lambda p: set_mode(p, node_id, port, InterfaceMode(text)))
+
     def add_port(self) -> None:
         node_id = self.shown_node()
         if node_id is None:
             return
-        try:
-            project, _ = add_interface(self.document.project, node_id)
-        except ValueError as exc:
-            self.canvas.status_message.emit(str(exc))
+        self._edit("Add port", lambda p: add_interface(p, node_id)[0])
+
+    def remove_selected_port(self) -> None:
+        node_id, port = self.shown_node(), self._selected_port()
+        if node_id is None or port is None:
             return
-        self.document.apply(project, "Add port")
+        self._edit("Remove port", lambda p: remove_interface(p, node_id, port))
 
     def remove_selected_cable(self) -> None:
         links = self._links_of_selected_port()

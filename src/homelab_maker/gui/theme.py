@@ -22,6 +22,9 @@ class Tokens:
     text_muted: str
     accent: str
     danger: str
+    # Good news and a warning, for the status of a flow and for the checks.
+    ok: str
+    warning: str
     link: str
     # Colours for zones, cycled in order, drawn with zone_alpha (0-255) over the canvas.
     # Labels use text_muted over the result.
@@ -40,6 +43,8 @@ LIGHT = Tokens(
     text_muted="#4a5568",
     accent="#2563eb",
     danger="#c0262d",
+    ok="#15803d",
+    warning="#b45309",
     link="#5b6678",
     zones=("#2563eb", "#16a34a", "#d97706", "#9333ea"),
     zone_alpha=34,
@@ -56,6 +61,8 @@ DARK = Tokens(
     text_muted="#a9b4c4",
     accent="#6ea0ff",
     danger="#ff7b80",
+    ok="#4ade80",
+    warning="#fbbf24",
     link="#8b97aa",
     zones=("#6ea0ff", "#4ade80", "#fbbf24", "#c084fc"),
     zone_alpha=38,

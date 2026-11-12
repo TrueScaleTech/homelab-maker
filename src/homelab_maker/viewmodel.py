@@ -33,11 +33,13 @@ def _plural(count: int, singular: str, plural: str) -> str:
     return f"{count} {singular if count == 1 else plural}"
 
 
-def status_text(project: Project, selected: int) -> str:
+def status_text(project: Project, selected: int, warnings: int = 0) -> str:
     parts = [
         _plural(len(project.nodes), "device", "devices"),
         _plural(len(project.links), "link", "links"),
     ]
+    if warnings:
+        parts.append(_plural(warnings, "warning", "warnings"))
     if selected:
         parts.append(f"{selected} selected")
     return " · ".join(parts)

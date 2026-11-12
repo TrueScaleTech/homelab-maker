@@ -28,6 +28,8 @@ def test_marks_that_are_not_text_stand_out_from_their_background(tokens: Tokens)
     assert contrast(tokens.accent, tokens.card) >= 3
     assert contrast(tokens.link, tokens.background) >= 3
     assert contrast(tokens.danger, tokens.card) >= 4.5
+    assert contrast(tokens.ok, tokens.card) >= 4.5
+    assert contrast(tokens.warning, tokens.card) >= 4.5
 
 
 @pytest.mark.parametrize("tokens", [LIGHT, DARK], ids=lambda t: t.name)
@@ -49,6 +51,8 @@ def test_every_colour_is_a_plain_hex_value(tokens: Tokens) -> None:
         tokens.text,
         tokens.text_muted,
         tokens.accent,
+        tokens.ok,
+        tokens.warning,
         tokens.danger,
         tokens.link,
         *tokens.zones,

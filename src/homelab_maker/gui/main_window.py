@@ -17,9 +17,11 @@ from PySide6.QtWidgets import (
 )
 
 from homelab_maker import __version__, settings
+from homelab_maker.checks import Severity
 from homelab_maker.document import Document
 from homelab_maker.gui import qt_theme
 from homelab_maker.gui.canvas import Canvas
+from homelab_maker.gui.findings import FindingsPanel
 from homelab_maker.gui.icons import app_icon
 from homelab_maker.gui.inspector import Inspector
 from homelab_maker.gui.palette import Palette
@@ -70,6 +72,15 @@ class MainWindow(QMainWindow):
         details.setWidget(self.inspector)
         details.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, details)
+
+        self.findings = FindingsPanel(self.document, self.tokens)
+        self.findings.reveal = self.canvas.reveal
+        checks = QDockWidget("Checks", self)
+        checks.setObjectName("checks-dock")
+        checks.setWidget(self.findings)
+        checks.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, checks)
+        self.findings.counted.connect(lambda _count: self._update_ui())
 
         self._counts = QLabel()
         self.statusBar().addPermanentWidget(self._counts)
@@ -215,7 +226,8 @@ class MainWindow(QMainWindow):
         self.cable_action.setChecked(self.canvas.cable_tool)
         self.trail_label.setText(trail_text(doc.project, self.canvas.view))
         self.rename_action.setEnabled(len(selected) == 1)
-        self._counts.setText(status_text(doc.project, len(selected)))
+        warnings = sum(1 for f in self.findings.findings if f.severity is Severity.WARNING)
+        self._counts.setText(status_text(doc.project, len(selected), warnings))
 
     # ---------------------------------------------------------------------- the theme
 
@@ -230,6 +242,7 @@ class MainWindow(QMainWindow):
         self._apply_to_application()
         self.canvas.set_tokens(self.tokens)
         self.device_list.set_tokens(self.tokens)
+        self.findings.set_tokens(self.tokens)
         self.scheme_actions[scheme].setChecked(True)
         settings.save(self.preferences)
 

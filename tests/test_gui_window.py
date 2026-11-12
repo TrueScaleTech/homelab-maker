@@ -95,7 +95,7 @@ def test_control_z_undoes_from_the_keyboard(window: MainWindow, qapp: QApplicati
 def test_the_status_bar_counts_what_is_there(window: MainWindow) -> None:
     window.canvas.add_device("nas", 1, 1)
     window.canvas.add_device("switch", 3, 1)
-    assert window._counts.text() == "2 devices · 0 links · 1 selected"
+    assert window._counts.text() == "2 devices · 0 links · 2 warnings · 1 selected"
 
 
 def test_double_clicking_in_the_list_places_a_device_in_view(window: MainWindow) -> None:

@@ -491,6 +491,14 @@ class Canvas(QGraphicsView):
         self.view_changed.emit()
         self.selection_changed.emit()
 
+    def reveal(self, node_id: str) -> None:
+        """Show a device wherever it is, going into its host if need be, and select it."""
+        node = self.document.project.node(node_id)
+        if node is None:
+            return
+        self.go_to(node.parent)
+        self.select_ids({node_id})
+
     def leave(self) -> None:
         """Go up one level."""
         if self.view is None:
