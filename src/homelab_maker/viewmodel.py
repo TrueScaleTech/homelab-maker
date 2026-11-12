@@ -4,6 +4,7 @@ Wording, counts and which links to draw live here, not in the widgets, so they a
 without a display. The widgets only draw what these functions return.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -180,3 +181,23 @@ def link_summary(project: Project, link_id: str) -> str:
         node = project.node(end.node)
         ends.append(f"{node.name if node else end.node} · {end.interface}")
     return f"{ends[0]} — {ends[1]} ({link.medium.value})"
+
+
+def path_cards(project: Project, view: str | None, path: Sequence[str]) -> tuple[str, ...]:
+    """The cards a path passes through, as seen from ``view``.
+
+    A path through a guest and its host is one card from the canvas; a part of the path
+    outside the view is left out.
+    """
+    cards: list[str] = []
+    for node_id in path:
+        card = shown_as(project, node_id, view)
+        if card is not None and (not cards or cards[-1] != card):
+            cards.append(card)
+    return tuple(cards)
+
+
+def reference_label(project: Project, reference: str) -> str:
+    """How a rule's source or destination is shown: a device by name, the rest as written."""
+    node = project.node(reference)
+    return node.name if node is not None else reference

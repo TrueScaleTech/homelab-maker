@@ -6,7 +6,7 @@ The details panel offers text boxes; these functions decide what the text means.
 
 import re
 
-from homelab_maker.model import MAX_VLAN
+from homelab_maker.model import ANY, MAX_PORT, MAX_VLAN, Project, is_network
 
 _SEPARATORS = re.compile(r"[,;\s]+")
 
@@ -72,3 +72,31 @@ def format_vlans(vlans: tuple[int, ...]) -> str:
         if number is not None:
             start = previous = number
     return ", ".join(pieces)
+
+
+def parse_reference(project: Project, text: str) -> str:
+    """What a rule's source or destination means: ``any``, a network, or a device.
+
+    A device may be written by its id or by its name, in any case.
+    """
+    text = text.strip()
+    if not text:
+        raise ValueError("write any, a network such as 192.168.1.0/24, or the name of a device")
+    if text.lower() == ANY:
+        return ANY
+    if is_network(text):
+        return text
+    for node in project.nodes:
+        if text == node.id or text.lower() == node.name.lower():
+            return node.id
+    raise ValueError(f"there is no device called {text!r}")
+
+
+def parse_port(text: str) -> int | None:
+    """A port number, or nothing for "any port"."""
+    text = text.strip()
+    if not text or text.lower() == ANY:
+        return None
+    if not text.isdigit() or not 1 <= int(text) <= MAX_PORT:
+        raise ValueError(f"a port is a number from 1 to {MAX_PORT}")
+    return int(text)
