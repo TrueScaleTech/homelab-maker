@@ -1,0 +1,280 @@
+"""The main window: menus, the device list, the canvas, and opening and saving files."""
+
+import base64
+from pathlib import Path
+
+from PySide6.QtCore import QByteArray, Qt
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
+from PySide6.QtWidgets import (
+    QApplication,
+    QDockWidget,
+    QFileDialog,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+)
+
+from homelab_maker import __version__, settings
+from homelab_maker.document import Document
+from homelab_maker.gui import qt_theme
+from homelab_maker.gui.canvas import Canvas
+from homelab_maker.gui.icons import app_icon
+from homelab_maker.gui.palette import Palette
+from homelab_maker.gui.theme import Scheme
+from homelab_maker.model import Project
+from homelab_maker.storage import ProjectFileError, load, save
+from homelab_maker.viewmodel import (
+    APP_NAME,
+    PROJECT_SUFFIX,
+    project_path,
+    status_text,
+    window_title,
+)
+
+_FILE_FILTER = f"HomeLabMaker project (*{PROJECT_SUFFIX});;All files (*)"
+_SCHEMES: tuple[tuple[Scheme, str], ...] = (
+    ("system", "Follow the system"),
+    ("light", "Light"),
+    ("dark", "Dark"),
+)
+
+
+class MainWindow(QMainWindow):
+    def __init__(
+        self,
+        document: Document | None = None,
+        preferences: settings.Preferences | None = None,
+    ) -> None:
+        super().__init__()
+        self.document = document if document is not None else Document()
+        self.preferences = preferences if preferences is not None else settings.load()
+        self.tokens = qt_theme.tokens_for(self.preferences.scheme)
+        self._apply_to_application()
+
+        self.canvas = Canvas(self.document, self.tokens)
+        self.device_list = Palette(self.tokens)
+        self.setCentralWidget(self.canvas)
+        dock = QDockWidget("Devices", self)
+        dock.setObjectName("devices-dock")
+        dock.setWidget(self.device_list)
+        dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
+
+        self._counts = QLabel()
+        self.statusBar().addPermanentWidget(self._counts)
+        self.setWindowIcon(app_icon())
+        self.resize(1200, 780)
+
+        self._build_actions()
+        self._build_menus()
+
+        self.device_list.kind_chosen.connect(self.canvas.add_at_center)
+        self.canvas.status_message.connect(lambda text: self.statusBar().showMessage(text, 5000))
+        self.canvas.selection_changed.connect(self._update_ui)
+        self.document.subscribe(self._update_ui)
+
+        if self.preferences.geometry:
+            self.restoreGeometry(QByteArray.fromBase64(self.preferences.geometry.encode("ascii")))
+        self._update_ui()
+
+    # ------------------------------------------------------------------------ actions
+
+    def _action(
+        self, text: str, slot: object, shortcut: str | QKeySequence.StandardKey = ""
+    ) -> QAction:
+        action = QAction(text, self)
+        action.triggered.connect(slot)
+        if shortcut:
+            action.setShortcut(QKeySequence(shortcut))
+        return action
+
+    def _build_actions(self) -> None:
+        std = QKeySequence.StandardKey
+        self.new_action = self._action("&New", self.new_document, std.New)
+        self.open_action = self._action("&Open…", self.open_document, std.Open)
+        self.save_action = self._action("&Save", self.save, std.Save)
+        self.save_as_action = self._action("Save &as…", self.save_as, std.SaveAs)
+        self.quit_action = self._action("&Quit", self.close, "Ctrl+Q")
+        self.undo_action = self._action("&Undo", self.undo, std.Undo)
+        self.redo_action = self._action("&Redo", self.redo, std.Redo)
+        # Delete, Rename and Select all are handled by the canvas as keys, so these entries
+        # only show the key in the menu and do not register a second shortcut.
+        self.rename_action = self._action("Re&name\tF2", self.canvas.rename_selected)
+        self.delete_action = self._action("&Delete\tDel", self.canvas.delete_selected)
+        self.select_all_action = self._action("Select &all\tCtrl+A", self.canvas.select_all)
+        self.zoom_in_action = self._action("Zoom &in", lambda: self.canvas.zoom_by(1.25), "Ctrl+=")
+        self.zoom_out_action = self._action("Zoom &out", lambda: self.canvas.zoom_by(0.8), "Ctrl+-")
+        self.zoom_reset_action = self._action("&Actual size", self.canvas.zoom_reset, "Ctrl+0")
+        self.zoom_fit_action = self._action("&Fit everything", self.canvas.zoom_fit, "Ctrl+1")
+        self.about_action = self._action(f"&About {APP_NAME}", self.about)
+
+    def _build_menus(self) -> None:
+        bar = self.menuBar()
+        file_menu = bar.addMenu("&File")
+        file_menu.addActions([self.new_action, self.open_action])
+        file_menu.addSeparator()
+        file_menu.addActions([self.save_action, self.save_as_action])
+        file_menu.addSeparator()
+        file_menu.addAction(self.quit_action)
+
+        edit_menu = bar.addMenu("&Edit")
+        edit_menu.addActions([self.undo_action, self.redo_action])
+        edit_menu.addSeparator()
+        edit_menu.addActions([self.rename_action, self.delete_action, self.select_all_action])
+
+        view_menu = bar.addMenu("&View")
+        view_menu.addActions(
+            [
+                self.zoom_in_action,
+                self.zoom_out_action,
+                self.zoom_reset_action,
+                self.zoom_fit_action,
+            ]
+        )
+        view_menu.addSeparator()
+        theme_menu = view_menu.addMenu("&Theme")
+        group = QActionGroup(self)
+        self.scheme_actions: dict[str, QAction] = {}
+        for scheme, label in _SCHEMES:
+            action = QAction(label, self, checkable=True)
+            action.setChecked(scheme == self.preferences.scheme)
+            action.triggered.connect(lambda _checked=False, s=scheme: self.set_scheme(s))
+            group.addAction(action)
+            theme_menu.addAction(action)
+            self.scheme_actions[scheme] = action
+
+        bar.addMenu("&Help").addAction(self.about_action)
+
+    def _update_ui(self) -> None:
+        doc = self.document
+        self.setWindowTitle(window_title(doc.path, doc.dirty))
+        self.undo_action.setEnabled(doc.can_undo)
+        self.redo_action.setEnabled(doc.can_redo)
+        self.undo_action.setText(f"&Undo {doc.undo_label}" if doc.undo_label else "&Undo")
+        self.redo_action.setText(f"&Redo {doc.redo_label}" if doc.redo_label else "&Redo")
+        selected = self.canvas.selected_ids()
+        self.delete_action.setEnabled(bool(selected))
+        self.rename_action.setEnabled(len(selected) == 1)
+        self._counts.setText(status_text(doc.project, len(selected)))
+
+    # ---------------------------------------------------------------------- the theme
+
+    def _apply_to_application(self) -> None:
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            qt_theme.apply(app, self.tokens)
+
+    def set_scheme(self, scheme: Scheme) -> None:
+        self.preferences.scheme = scheme
+        self.tokens = qt_theme.tokens_for(scheme)
+        self._apply_to_application()
+        self.canvas.set_tokens(self.tokens)
+        self.device_list.set_tokens(self.tokens)
+        self.scheme_actions[scheme].setChecked(True)
+        settings.save(self.preferences)
+
+    # ------------------------------------------------------------------------- editing
+
+    def undo(self) -> None:
+        self.document.undo()
+
+    def redo(self) -> None:
+        self.document.redo()
+
+    # --------------------------------------------------------------------------- files
+
+    def _confirm_discard(self) -> bool:
+        """Whether it is fine to throw away the unsaved changes (or save them first)."""
+        if not self.document.dirty:
+            return True
+        name = self.document.path.name if self.document.path else "Untitled"
+        buttons = QMessageBox.StandardButton
+        answer = QMessageBox.question(
+            self,
+            APP_NAME,
+            f"Save the changes to {name}?",
+            buttons.Save | buttons.Discard | buttons.Cancel,
+            buttons.Save,
+        )
+        if answer == buttons.Save:
+            return self.save()
+        return answer == buttons.Discard
+
+    def new_document(self) -> None:
+        if self._confirm_discard():
+            self.document.replace(Project(), None)
+            self.canvas.zoom_reset()
+
+    def open_document(self) -> None:
+        chosen, _ = QFileDialog.getOpenFileName(
+            self, "Open project", self.preferences.last_directory, _FILE_FILTER
+        )
+        if chosen and self._confirm_discard():
+            self.open_path(Path(chosen))
+
+    def open_path(self, path: Path) -> bool:
+        """Open a project file. Says why, and changes nothing, if it cannot be used."""
+        try:
+            project = load(path)
+        except ProjectFileError as exc:
+            QMessageBox.critical(self, "Cannot open the project", str(exc))
+            return False
+        self.document.replace(project, path)
+        self._remember_directory(path)
+        self.canvas.zoom_fit()
+        return True
+
+    def save(self) -> bool:
+        if self.document.path is None:
+            return self.save_as()
+        return self.save_to(self.document.path)
+
+    def save_as(self) -> bool:
+        start = self.document.path.name if self.document.path else "homelab" + PROJECT_SUFFIX
+        chosen, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save project",
+            str(Path(self.preferences.last_directory) / start),
+            _FILE_FILTER,
+        )
+        if not chosen:
+            return False
+        return self.save_to(project_path(Path(chosen)))
+
+    def save_to(self, path: Path) -> bool:
+        try:
+            save(path, self.document.project)
+        except OSError as exc:
+            QMessageBox.critical(
+                self, "Cannot save the project", f"{path.name}: {exc.strerror or exc}"
+            )
+            return False
+        self.document.mark_saved(path)
+        self._remember_directory(path)
+        self.statusBar().showMessage(f"Saved {path.name}", 5000)
+        return True
+
+    def _remember_directory(self, path: Path) -> None:
+        self.preferences.last_directory = str(path.parent)
+        settings.save(self.preferences)
+
+    # ---------------------------------------------------------------------- the window
+
+    def about(self) -> None:
+        QMessageBox.about(
+            self,
+            f"About {APP_NAME}",
+            f"<b>{APP_NAME}</b> {__version__}<br>Draw your homelab on a grid and ask what can "
+            "reach what.<br><br>It makes no network connection and sends nothing anywhere. "
+            "MIT licence.",
+        )
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if not self._confirm_discard():
+            event.ignore()
+            return
+        self.preferences.geometry = base64.b64encode(bytes(self.saveGeometry().data())).decode(
+            "ascii"
+        )
+        settings.save(self.preferences)
+        event.accept()
