@@ -29,6 +29,9 @@ class DeviceKind:
     port_prefix: str
     # Forwards traffic between networks unless a node says otherwise.
     routes: bool = False
+    # Passes other devices' traffic along (a switch, a modem, an access point, a router).
+    # A device that does not is only ever the start or the end of a path.
+    carries: bool = False
     # Kinds that may be placed directly inside this one.
     contains: frozenset[str] = frozenset()
 
@@ -37,11 +40,11 @@ _GUESTS = frozenset({"vm", "container"})
 
 _KINDS = (
     DeviceKind("internet", "Internet", Category.EXTERNAL, 1, "eth"),
-    DeviceKind("modem", "Modem or ONT", Category.NETWORK, 2, "eth"),
-    DeviceKind("router", "Router", Category.NETWORK, 5, "eth", routes=True),
-    DeviceKind("firewall", "Firewall", Category.NETWORK, 4, "eth", routes=True),
-    DeviceKind("switch", "Switch", Category.NETWORK, 8, "port"),
-    DeviceKind("access_point", "Access point", Category.NETWORK, 1, "eth"),
+    DeviceKind("modem", "Modem or ONT", Category.NETWORK, 2, "eth", carries=True),
+    DeviceKind("router", "Router", Category.NETWORK, 5, "eth", routes=True, carries=True),
+    DeviceKind("firewall", "Firewall", Category.NETWORK, 4, "eth", routes=True, carries=True),
+    DeviceKind("switch", "Switch", Category.NETWORK, 8, "port", carries=True),
+    DeviceKind("access_point", "Access point", Category.NETWORK, 1, "eth", carries=True),
     DeviceKind("nas", "NAS", Category.HOST, 2, "eth", contains=_GUESTS),
     DeviceKind("server", "Server or mini PC", Category.HOST, 2, "eth", contains=_GUESTS),
     DeviceKind(
