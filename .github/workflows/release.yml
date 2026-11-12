@@ -1,0 +1,99 @@
+name: Release
+
+# Tag a commit to build a release:
+#   git tag -s vX.Y.Z && git push origin vX.Y.Z
+#
+# The workflow builds the Windows app on a clean machine, starts the packaged program to
+# check that it really runs, zips it, and attaches the zip to a DRAFT release marked as a
+# pre-release. The draft is published by hand, after the file has been tried.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and attach the file to"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows build
+    runs-on: windows-latest
+    permissions:
+      # Only this job writes, and only to create the draft release.
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Build the app
+        shell: pwsh
+        run: .\packaging\build-windows.ps1 -OutDir "${{ runner.temp }}\build"
+
+      - name: Check the build runs
+        shell: pwsh
+        timeout-minutes: 5
+        env:
+          # Never touch the runner's own settings, and never show a window.
+          HOMELAB_MAKER_CONFIG_DIR: ${{ runner.temp }}\smoke\config
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $exe = "${{ runner.temp }}\build\HomeLabMaker\HomeLabMaker.exe"
+          $out = "${{ runner.temp }}\smoke\check.homelab.json"
+          New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
+          $app = Start-Process -FilePath $exe -ArgumentList @("--smoke-test", $out) -PassThru
+          if (-not $app.WaitForExit(120000)) {
+            Stop-Process -Id $app.Id -Force
+            throw "the packaged app did not finish its check within two minutes"
+          }
+          if ($app.ExitCode -ne 0) { throw "the packaged app failed its own check ($($app.ExitCode))" }
+          if (-not (Test-Path $out)) { throw "the packaged app reported success but wrote no project" }
+          Write-Host "The packaged app starts, draws a homelab and saves it."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: ${{ runner.temp }}\build\*.zip
+          if-no-files-found: error
+
+      - name: Draft the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ inputs.tag }}"
+          if (-not $tag) { $tag = "${{ github.ref_name }}" }
+
+          # -Include needs a wildcard in the path, or it quietly matches nothing.
+          $dir = "${{ runner.temp }}\build"
+          $files = @(Get-ChildItem -Path "$dir\*" -Include *.zip -File)
+          if ($files.Count -ne 1) {
+            throw "expected one zip, found $($files.Count) file(s) in $dir"
+          }
+          Write-Host "Attaching: $($files.Name -join ', ')"
+
+          # A draft carries no tag until it is published, so GitHub is happy to hold
+          # several drafts for the same tag and cannot tell them apart. Clear any draft for
+          # this tag first, then make exactly one. Only drafts are touched: a published
+          # release is never one of these. The filtering is done in PowerShell rather than
+          # in a jq expression, because the quotes a jq filter needs around the tag would
+          # end the argument early.
+          $json = gh api "repos/${{ github.repository }}/releases" --paginate
+          if ($LASTEXITCODE -ne 0) { throw "could not list the releases" }
+          $stale = @($json | ConvertFrom-Json | Where-Object { $_.draft -and $_.tag_name -eq $tag })
+          foreach ($old in $stale) {
+            Write-Host "Removing an earlier draft for $tag ($($old.id))."
+            gh api -X DELETE "repos/${{ github.repository }}/releases/$($old.id)"
+            if ($LASTEXITCODE -ne 0) { throw "could not remove draft $($old.id)" }
+          }
+
+          gh release create $tag --draft --prerelease --title "HomeLabMaker $tag" `
+            --generate-notes @($files.FullName)
+          if ($LASTEXITCODE -ne 0) { throw "could not create the release" }

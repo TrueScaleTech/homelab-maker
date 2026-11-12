@@ -31,7 +31,12 @@ dependencies = [
     "PySide6-Essentials>=6.7",
 ]
 
+[project.gui-scripts]
+homelabmaker = "homelab_maker.app:main"
+
 [project.optional-dependencies]
+# Only needed to build the Windows application, never to run or develop it.
+build = ["pyinstaller>=6.10"]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
