@@ -1,17 +1,21 @@
 <#
 .SYNOPSIS
-    Builds HomeLabMaker for Windows: the application as a folder, and a zip of it.
+    Builds HomeLabMaker for Windows: the application as a folder, a zip of it and, when
+    Inno Setup is installed, an installer.
 
 .PARAMETER OutDir
     Where the finished application goes. Defaults to "dist" in the repository. If your
     checkout sits deep inside nested folders, pass a short path: Windows stops at 260
     characters unless long paths are switched on.
 
-.NOTES
-    An installer is not built yet; that comes with the first public release.
+.PARAMETER Installer
+    "auto" (the default) builds the installer if Inno Setup is found and skips it if not.
+    "require" fails when it cannot be built; "skip" never builds it.
 #>
 param(
-    [string]$OutDir = "dist"
+    [string]$OutDir = "dist",
+    [ValidateSet("auto", "require", "skip")]
+    [string]$Installer = "auto"
 )
 
 # Not "Stop": Windows PowerShell 5.1 would treat any text a tool writes to stderr
@@ -48,7 +52,25 @@ python -m PyInstaller packaging\launcher.py `
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 
 $app = Join-Path $OutDir "HomeLabMaker"
-$zip = Join-Path $OutDir "HomeLabMaker-$version-windows.zip"
+$zip = Join-Path $OutDir "HomeLabMaker-$version-windows-x64.zip"
 Compress-Archive -Path $app -DestinationPath $zip -Force -ErrorAction Stop
 Write-Host "Built  $app"
 Write-Host "Zipped $zip"
+
+if ($Installer -ne "skip") {
+    $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+    $found = if ($iscc) { $iscc.Source } else {
+        @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+          "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe") |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+    }
+    if (-not $found) {
+        if ($Installer -eq "require") { throw "Inno Setup (ISCC.exe) was not found" }
+        Write-Host "Inno Setup was not found, so no installer was built."
+    } else {
+        & $found "/DAppVersion=$version" "/DSourceDir=$app" "/DOutDir=$OutDir" "/DIconFile=$icon" `
+            "$repo\packaging\windows-installer.iss"
+        if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+        Write-Host "Installer $OutDir\HomeLabMaker-$version-windows-x64-setup.exe"
+    }
+}

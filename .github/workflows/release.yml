@@ -3,16 +3,18 @@ name: Release
 # Tag a commit to build a release:
 #   git tag -s vX.Y.Z && git push origin vX.Y.Z
 #
-# The workflow builds the Windows app on a clean machine, starts the packaged program to
-# check that it really runs, zips it, and attaches the zip to a DRAFT release marked as a
-# pre-release. The draft is published by hand, after the file has been tried.
+# Windows and Linux are built on clean machines. Every file is started once before it is
+# offered: the folder build, the Windows installer (installed silently, run, removed), the
+# Linux archive, the AppImage and the .deb (installed with apt). Only if all of that works
+# are the files attached to a DRAFT release marked as a pre-release, with a checksum file.
+# The draft is published by hand, after the files have been tried.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to build and attach the file to"
+        description: "Tag to build and attach the files to"
         required: true
 
 permissions:
@@ -22,9 +24,6 @@ jobs:
   windows:
     name: Windows build
     runs-on: windows-latest
-    permissions:
-      # Only this job writes, and only to create the draft release.
-      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -33,11 +32,20 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Build the app
+      - name: Install Inno Setup
         shell: pwsh
-        run: .\packaging\build-windows.ps1 -OutDir "${{ runner.temp }}\build"
+        run: |
+          $known = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue) -and -not (Test-Path $known)) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "could not install Inno Setup" }
+          }
 
-      - name: Check the build runs
+      - name: Build the app, the zip and the installer
+        shell: pwsh
+        run: .\packaging\build-windows.ps1 -OutDir "${{ runner.temp }}\build" -Installer require
+
+      - name: Check the folder build runs
         shell: pwsh
         timeout-minutes: 5
         env:
@@ -46,7 +54,7 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           $exe = "${{ runner.temp }}\build\HomeLabMaker\HomeLabMaker.exe"
-          $out = "${{ runner.temp }}\smoke\check.homelab.json"
+          $out = "${{ runner.temp }}\smoke\folder.homelab.json"
           New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
           $app = Start-Process -FilePath $exe -ArgumentList @("--smoke-test", $out) -PassThru
           if (-not $app.WaitForExit(120000)) {
@@ -57,43 +65,152 @@ jobs:
           if (-not (Test-Path $out)) { throw "the packaged app reported success but wrote no project" }
           Write-Host "The packaged app starts, draws a homelab and saves it."
 
-      - uses: actions/upload-artifact@v4
+      - name: Check the installer installs, runs and uninstalls
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          HOMELAB_MAKER_CONFIG_DIR: ${{ runner.temp }}\smoke\config
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $setup = Get-ChildItem "${{ runner.temp }}\build\*-setup.exe" | Select-Object -First 1
+          if (-not $setup) { throw "no installer was built" }
+          $target = "${{ runner.temp }}\installed"
+          $install = Start-Process -FilePath $setup.FullName -PassThru -Wait -ArgumentList @(
+            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER", "/DIR=$target")
+          if ($install.ExitCode -ne 0) { throw "the installer failed ($($install.ExitCode))" }
+          $exe = Join-Path $target "HomeLabMaker.exe"
+          if (-not (Test-Path $exe)) { throw "the installer did not put the program where it was told" }
+          $out = "${{ runner.temp }}\smoke\installed.homelab.json"
+          $app = Start-Process -FilePath $exe -ArgumentList @("--smoke-test", $out) -PassThru
+          if (-not $app.WaitForExit(120000)) { Stop-Process -Id $app.Id -Force; throw "the installed app hung" }
+          if ($app.ExitCode -ne 0 -or -not (Test-Path $out)) { throw "the installed app failed its own check" }
+          $remove = Start-Process -FilePath (Join-Path $target "unins000.exe") -PassThru -Wait `
+            -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
+          if ($remove.ExitCode -ne 0) { throw "the uninstaller failed ($($remove.ExitCode))" }
+          Start-Sleep -Seconds 2
+          if (Test-Path $exe) { throw "the uninstaller left the program behind" }
+          Write-Host "The installer installs, the program runs, the uninstaller removes it."
+
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-build
-          path: ${{ runner.temp }}\build\*.zip
+          path: |
+            ${{ runner.temp }}\build\*.zip
+            ${{ runner.temp }}\build\*-setup.exe
           if-no-files-found: error
 
+  linux:
+    name: Linux build
+    # The oldest long-term-support Ubuntu still maintained: what is built here needs at
+    # least the C library of the machine it was built on, so older is better.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: System libraries for Qt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 \
+            libfontconfig1 libglib2.0-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-randr0 \
+            libxcb-xfixes0 libxcb-sync1 libxcb-xkb1
+
+      - name: Build the archive, the .deb and the AppImage
+        run: bash packaging/build-linux.sh "$RUNNER_TEMP/build"
+
+      - name: Check each file starts and works
+        timeout-minutes: 15
+        env:
+          HOMELAB_MAKER_CONFIG_DIR: ${{ runner.temp }}/smoke/config
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          set -euo pipefail
+          build="$RUNNER_TEMP/build"
+          mkdir -p "$RUNNER_TEMP/smoke"
+
+          echo "--- the archive"
+          mkdir -p "$RUNNER_TEMP/unpacked"
+          tar -C "$RUNNER_TEMP/unpacked" -xzf "$build"/HomeLabMaker-*-linux-x86_64.tar.gz
+          timeout 120 "$RUNNER_TEMP/unpacked/HomeLabMaker/homelabmaker" --smoke-test "$RUNNER_TEMP/smoke/archive.homelab.json"
+          test -s "$RUNNER_TEMP/smoke/archive.homelab.json"
+
+          echo "--- the AppImage"
+          chmod +x "$build"/HomeLabMaker-*-x86_64.AppImage
+          timeout 120 "$build"/HomeLabMaker-*-x86_64.AppImage --appimage-extract-and-run \
+            --smoke-test "$RUNNER_TEMP/smoke/appimage.homelab.json"
+          test -s "$RUNNER_TEMP/smoke/appimage.homelab.json"
+
+          echo "--- the .deb"
+          sudo apt-get install -y "$build"/homelab-maker_*_amd64.deb
+          timeout 120 homelabmaker --smoke-test "$RUNNER_TEMP/smoke/deb.homelab.json"
+          test -s "$RUNNER_TEMP/smoke/deb.homelab.json"
+          test -f /usr/share/applications/homelab-maker.desktop
+          sudo apt-get remove -y homelab-maker
+          test ! -e /usr/bin/homelabmaker
+          echo "Every file starts, draws a homelab and saves it."
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-build
+          path: |
+            ${{ runner.temp }}/build/*.tar.gz
+            ${{ runner.temp }}/build/*.deb
+            ${{ runner.temp }}/build/*.AppImage
+          if-no-files-found: error
+
+  release:
+    name: Draft the release
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      # Only this job writes, and only to create the draft release.
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: files
+          merge-multiple: true
+
       - name: Draft the release
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          $tag = "${{ inputs.tag }}"
-          if (-not $tag) { $tag = "${{ github.ref_name }}" }
+          set -euo pipefail
+          tag="${INPUT_TAG:-$GITHUB_REF_NAME}"
+          version="${tag#v}"
 
-          # -Include needs a wildcard in the path, or it quietly matches nothing.
-          $dir = "${{ runner.temp }}\build"
-          $files = @(Get-ChildItem -Path "$dir\*" -Include *.zip -File)
-          if ($files.Count -ne 1) {
-            throw "expected one zip, found $($files.Count) file(s) in $dir"
-          }
-          Write-Host "Attaching: $($files.Name -join ', ')"
+          cd files
+          ls -l
+          [ "$(ls | wc -l)" -eq 5 ] || { echo "expected 5 files"; exit 1; }
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          cd ..
 
-          # A draft carries no tag until it is published, so GitHub is happy to hold
-          # several drafts for the same tag and cannot tell them apart. Clear any draft for
-          # this tag first, then make exactly one. Only drafts are touched: a published
-          # release is never one of these. The filtering is done in PowerShell rather than
-          # in a jq expression, because the quotes a jq filter needs around the tag would
-          # end the argument early.
-          $json = gh api "repos/${{ github.repository }}/releases" --paginate
-          if ($LASTEXITCODE -ne 0) { throw "could not list the releases" }
-          $stale = @($json | ConvertFrom-Json | Where-Object { $_.draft -and $_.tag_name -eq $tag })
-          foreach ($old in $stale) {
-            Write-Host "Removing an earlier draft for $tag ($($old.id))."
-            gh api -X DELETE "repos/${{ github.repository }}/releases/$($old.id)"
-            if ($LASTEXITCODE -ne 0) { throw "could not remove draft $($old.id)" }
-          }
+          # The notes are the section of the changelog for this version.
+          awk -v v="$version" '
+            $0 ~ "^## " v "( |$)" { on = 1; next }
+            on && /^## / { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          [ -s notes.md ] || { echo "CHANGELOG.md has no section for $version"; exit 1; }
 
-          gh release create $tag --draft --prerelease --title "HomeLabMaker $tag" `
-            --generate-notes @($files.FullName)
-          if ($LASTEXITCODE -ne 0) { throw "could not create the release" }
+          # A draft carries no tag until it is published, so GitHub is happy to hold several
+          # drafts for the same tag and cannot tell them apart. Clear any draft for this tag
+          # first, then make exactly one. Only drafts are touched.
+          gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+            --jq ".[] | select(.draft and .tag_name == \"$tag\") | .id" |
+            while read -r id; do
+              echo "Removing an earlier draft for $tag ($id)."
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+            done
+
+          gh release create "$tag" --draft --prerelease --title "HomeLabMaker $version" \
+            --notes-file notes.md files/*
