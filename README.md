@@ -20,6 +20,13 @@ theme is [here](docs/images/overview-dark.png).*
 
 Get the files from the [latest release](https://github.com/TrueScaleTech/homelab-maker/releases/latest).
 
+> **Windows may warn you when you open the installer.** The files are not code-signed yet
+> (a certificate costs money and needs a verified identity), and a new, little-downloaded
+> file has no reputation with Microsoft, so SmartScreen shows "Windows protected your PC".
+> That is expected. Check the file against `SHA256SUMS.txt` (below), then choose
+> **More info**, then **Run anyway**. If you would rather not, run the application from
+> source: see [Run it from source](#run-it-from-source).
+
 | System | File | Notes |
 | --- | --- | --- |
 | Windows 10 or 11 | `HomeLabMaker-<version>-windows-x64-setup.exe` | Installs for the current user, no administrator rights. |
@@ -28,9 +35,9 @@ Get the files from the [latest release](https://github.com/TrueScaleTech/homelab
 | Debian, Ubuntu and relatives | `homelab-maker_<version>_amd64.deb` | `sudo apt install ./homelab-maker_<version>_amd64.deb`, then start `homelabmaker`. |
 | Linux | `HomeLabMaker-<version>-linux-x86_64.tar.gz` | Unpack and run `HomeLabMaker/homelabmaker`. |
 
-`SHA256SUMS.txt` lists the checksum of every file. **The files are not code-signed yet**, so
-Windows SmartScreen may say the publisher is unknown; check the checksum and choose "Run
-anyway" if it matches. The Linux files were built on Ubuntu 22.04 and need a C library at
+`SHA256SUMS.txt` lists the checksum of every file. On Windows, compare it with the output of
+`certutil -hashfile <file> SHA256`; on Linux, run `sha256sum -c SHA256SUMS.txt --ignore-missing`.
+The Linux files were built on Ubuntu 22.04 and need a C library at
 least as new as that one.
 
 Every file is started once by the release workflow before it is attached, and the
