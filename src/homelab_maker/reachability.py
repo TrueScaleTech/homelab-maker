@@ -205,7 +205,7 @@ def _moves(
             continue
         if not strict or link.medium is Medium.VPN:
             leaving = {NO_VLAN}
-        elif (up and here.vlan == NO_VLAN) or node_routes(node) or here.vlan == NO_VLAN:
+        elif node_routes(node) or here.vlan == NO_VLAN:
             leaving = set(vlans_of(port_interface))
         else:
             leaving = {here.vlan} if accepts(port_interface, here.vlan) else set()
