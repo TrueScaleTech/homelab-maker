@@ -6,11 +6,13 @@ document when that changes.
 """
 
 import math
+from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QLineF, QPoint, QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
+    QContextMenuEvent,
     QDragEnterEvent,
     QDragMoveEvent,
     QDropEvent,
@@ -26,6 +28,7 @@ from PySide6.QtWidgets import (
     QGraphicsView,
     QInputDialog,
     QLineEdit,
+    QMenu,
     QStyleOptionGraphicsItem,
     QWidget,
 )
@@ -37,7 +40,18 @@ from homelab_maker.gui.icons import paint_kind
 from homelab_maker.gui.palette import MIME_KIND
 from homelab_maker.gui.theme import Tokens
 from homelab_maker.model import Medium, Project
-from homelab_maker.operations import add_node, can_move, delete_nodes, move_nodes, rename_node
+from homelab_maker.operations import (
+    add_node,
+    can_contain,
+    can_move,
+    connect,
+    delete_nodes,
+    disconnect,
+    move_into,
+    move_nodes,
+    move_out,
+    rename_node,
+)
 from homelab_maker.viewmodel import drawn_links, inside_count
 
 # The card is a little smaller than its cell, so neighbours never touch.
@@ -159,7 +173,7 @@ class Backdrop(QGraphicsItem):
         project = canvas.document.project
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        for index, zone in enumerate(project.zones):
+        for index, zone in enumerate(project.zones if canvas.view is None else ()):
             x, y = cell_origin(zone.x, zone.y)
             rect = QRectF(x, y, zone.width * CELL, zone.height * CELL)
             colour = QColor(tokens.zones[index % len(tokens.zones)])
@@ -175,18 +189,34 @@ class Backdrop(QGraphicsItem):
                 zone.name,
             )
 
-        for link in drawn_links(project):
+        for link in drawn_links(project, canvas.view):
             a, b = canvas.node_items.get(link.a), canvas.node_items.get(link.b)
             if a is None or b is None:
                 continue
             width, style = _LINK_STYLES[link.medium]
-            painter.setPen(QPen(QColor(tokens.link), width, style, Qt.PenCapStyle.RoundCap))
+            chosen = link.id == canvas.selected_link
+            colour = QColor(tokens.accent if chosen else tokens.link)
+            painter.setPen(
+                QPen(colour, width + 2 if chosen else width, style, Qt.PenCapStyle.RoundCap)
+            )
             painter.drawLine(a.center(), b.center())
+
+        pending = canvas.pending_cable()
+        if pending is not None:
+            start, end = pending
+            painter.setPen(
+                QPen(QColor(tokens.accent), 2, Qt.PenStyle.DashLine, Qt.PenCapStyle.RoundCap)
+            )
+            painter.drawLine(start, end)
 
 
 class Canvas(QGraphicsView):
     status_message = Signal(str)
     selection_changed = Signal()
+    # The canvas now shows the inside of another host, or came back out.
+    view_changed = Signal()
+    # The cable tool was switched on or off.
+    tool_changed = Signal()
 
     def __init__(self, document: Document, tokens: Tokens, parent: QWidget | None = None) -> None:
         scene = QGraphicsScene()
@@ -199,6 +229,14 @@ class Canvas(QGraphicsView):
         self.node_items: dict[str, NodeItem] = {}
         self._zoom = 1.0
         self._panning = False
+        # None shows the canvas; a node id shows the inside of that host.
+        self.view: str | None = None
+        self.selected_link: str | None = None
+        self.cable_medium = Medium.ETHERNET
+        self._cable_tool = False
+        self._cable_from: str | None = None
+        self._cable_press: str | None = None
+        self._cable_cursor: QPointF | None = None
 
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
@@ -206,10 +244,11 @@ class Canvas(QGraphicsView):
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAcceptDrops(True)
+        self.viewport().setMouseTracking(True)
 
         self._backdrop = Backdrop(self)
         scene.addItem(self._backdrop)
-        scene.selectionChanged.connect(self.selection_changed)
+        scene.selectionChanged.connect(self._scene_selection_changed)
         document.subscribe(self.refresh)
         self.refresh()
 
@@ -239,7 +278,7 @@ class Canvas(QGraphicsView):
             painter.drawLine(QPointF(rect.left(), row * CELL), QPointF(rect.right(), row * CELL))
 
     def drawForeground(self, painter: QPainter, area: QRectF | QRect) -> None:
-        if self.document.project.nodes:
+        if self.node_items:
             return
         painter.setPen(QColor(self.tokens.text_muted))
         font = painter.font()
@@ -248,7 +287,9 @@ class Canvas(QGraphicsView):
         painter.drawText(
             QRectF(0, 0, 8 * CELL, 3 * CELL),
             Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
-            "Double-click a device in the list, or drag one here.",
+            "Double-click a device in the list, or drag one here."
+            if self.view is None
+            else "This host is empty. Add a virtual machine or a container from the list.",
         )
 
     def node_moved(self) -> None:
@@ -261,7 +302,16 @@ class Canvas(QGraphicsView):
         """Make the scene match the document, keeping the items (and the selection) alive."""
         project = self.document.project
         scene = self.scene()
-        roots = {node.id: node for node in project.children(None)}
+        if self.view is not None and project.node(self.view) is None:
+            self.view = None  # the host was deleted, or an undo took it away
+            self.view_changed.emit()
+        if self.selected_link is not None and all(
+            link.id != self.selected_link for link in project.links
+        ):
+            self.selected_link = None
+        if self._cable_from is not None and project.node(self._cable_from) is None:
+            self._cable_from = None
+        roots = {node.id: node for node in project.children(self.view)}
 
         for node_id in [i for i in self.node_items if i not in roots]:
             scene.removeItem(self.node_items.pop(node_id))
@@ -284,9 +334,9 @@ class Canvas(QGraphicsView):
 
     def _update_extent(self, project: Project) -> None:
         cells = QRectF(_MIN_CELLS)
-        for node in project.children(None):
+        for node in project.children(self.view):
             cells = cells.united(QRectF(node.x, node.y, 1, 1))
-        for zone in project.zones:
+        for zone in project.zones if self.view is None else ():
             cells = cells.united(QRectF(zone.x, zone.y, zone.width, zone.height))
         cells.adjust(-_PADDING_CELLS, -_PADDING_CELLS, _PADDING_CELLS, _PADDING_CELLS)
         rect = QRectF(
@@ -296,6 +346,34 @@ class Canvas(QGraphicsView):
         self._backdrop.set_extent(rect)
 
     # ---------------------------------------------------------------------- selection
+
+    def _scene_selection_changed(self) -> None:
+        if self.selected_link is not None and self.scene().selectedItems():
+            self.selected_link = None
+            self._backdrop.update()
+        self.selection_changed.emit()
+
+    def select_link(self, link_id: str | None) -> None:
+        """Select a cable (or nothing). A cable and a device are never selected together."""
+        if link_id is not None:
+            self.scene().clearSelection()
+        if link_id != self.selected_link:
+            self.selected_link = link_id
+            self._backdrop.update()
+            self.selection_changed.emit()
+
+    def link_at(self, scene_pos: QPointF) -> str | None:
+        """The id of the cable drawn under a point of the scene, if any."""
+        reach = 7 / self._zoom
+        best: tuple[float, str] | None = None
+        for link in drawn_links(self.document.project, self.view):
+            a, b = self.node_items.get(link.a), self.node_items.get(link.b)
+            if a is None or b is None:
+                continue
+            distance = _distance_to_segment(scene_pos, a.center(), b.center())
+            if distance <= reach and (best is None or distance < best[0]):
+                best = (distance, link.id)
+        return best[1] if best else None
 
     def selected_ids(self) -> list[str]:
         return sorted(item.node_id for item in self.node_items.values() if item.isSelected())
@@ -315,12 +393,27 @@ class Canvas(QGraphicsView):
 
     def add_device(self, kind_key: str, cell_x: int, cell_y: int) -> None:
         try:
-            project, new_id = add_node(self.document.project, kind_key, cell_x, cell_y)
+            project, new_id = add_node(
+                self.document.project, kind_key, cell_x, cell_y, parent=self.view
+            )
         except ValueError as exc:
             self.status_message.emit(str(exc))
             return
         self.document.apply(project, f"Add {CATALOG[kind_key].label.lower()}")
         self.select_ids({new_id})
+
+    def add_device_inside(self, host_id: str, kind_key: str) -> None:
+        """Add a device straight into a host, without opening it first."""
+        try:
+            project, new_id = add_node(self.document.project, kind_key, 0, 0, parent=host_id)
+        except ValueError as exc:
+            self.status_message.emit(str(exc))
+            return
+        host = self.document.project.node(host_id)
+        self.document.apply(project, f"Add {CATALOG[kind_key].label.lower()}")
+        name = project.node(new_id)
+        if host is not None and name is not None:
+            self.status_message.emit(f"{name.name} is now inside {host.name}.")
 
     def add_at_center(self, kind_key: str) -> None:
         centre = self.mapToScene(self.viewport().rect().center())
@@ -328,6 +421,14 @@ class Canvas(QGraphicsView):
 
     def delete_selected(self) -> None:
         ids = self.selected_ids()
+        if not ids and self.selected_link is not None:
+            try:
+                project = disconnect(self.document.project, [self.selected_link])
+            except ValueError as exc:
+                self.status_message.emit(str(exc))
+                return
+            self.document.apply(project, "Remove cable")
+            return
         if ids:
             label = "Delete device" if len(ids) == 1 else "Delete devices"
             self.document.apply(delete_nodes(self.document.project, ids), label)
@@ -349,6 +450,66 @@ class Canvas(QGraphicsView):
         except ValueError as exc:
             self.status_message.emit(str(exc))
 
+    def _show_all(self) -> None:
+        if self.node_items:
+            self.zoom_fit()
+        else:
+            self.zoom_reset()
+
+    def can_enter(self, node_id: str) -> bool:
+        node = self.document.project.node(node_id)
+        kind = CATALOG.get(node.kind) if node else None
+        return bool(kind and kind.contains)
+
+    def enter(self, node_id: str) -> None:
+        """Show the inside of a host."""
+        if not self.can_enter(node_id):
+            self.status_message.emit("Nothing can be put inside that.")
+            return
+        self.view = node_id
+        self.scene().clearSelection()
+        self.selected_link = None
+        self._cancel_cable()
+        self.refresh()
+        self._show_all()
+        self.view_changed.emit()
+        self.selection_changed.emit()
+
+    def go_to(self, view: str | None) -> None:
+        """Show the canvas (``None``) or the inside of any host, selecting the one left."""
+        if view == self.view:
+            return
+        left = self.view
+        self.view = view
+        self.scene().clearSelection()
+        self.selected_link = None
+        self._cancel_cable()
+        self.refresh()
+        self._show_all()
+        if left in self.node_items:
+            self.select_ids({left})
+        self.view_changed.emit()
+        self.selection_changed.emit()
+
+    def leave(self) -> None:
+        """Go up one level."""
+        if self.view is None:
+            return
+        host = self.document.project.node(self.view)
+        self.go_to(host.parent if host is not None else None)
+
+    def take_out(self) -> None:
+        """Move the selected devices out of their host."""
+        ids = self.selected_ids()
+        if not ids or self.view is None:
+            return
+        try:
+            project = move_out(self.document.project, ids)
+        except ValueError as exc:
+            self.status_message.emit(str(exc))
+            return
+        self.document.apply(project, "Take out of host")
+
     def nudge(self, dx: int, dy: int) -> None:
         """Move the selection by whole cells (the arrow keys)."""
         ids = self.selected_ids()
@@ -361,10 +522,36 @@ class Canvas(QGraphicsView):
         else:
             self.status_message.emit("That cell is taken.")
 
-    def _commit_drag(self) -> None:
+    def _nest_target(self, pos: QPoint, ids: list[str]) -> str | None:
+        """The host card under the pointer that can take every dragged card, if there is one."""
+        project = self.document.project
+        for item in self.items(pos):
+            if isinstance(item, NodeItem) and item.node_id not in ids:
+                kinds = [n.kind for n in project.nodes if n.id in ids]
+                if kinds and all(can_contain(project, item.node_id, kind) for kind in kinds):
+                    return item.node_id
+                return None
+        return None
+
+    def _commit_drag(self, pos: QPoint | None = None) -> None:
         """After a drag, turn how far the cards moved into one undoable step."""
         ids = self.selected_ids()
         project = self.document.project
+        host = self._nest_target(pos, ids) if pos is not None and ids else None
+        if host is not None and any(
+            (node := project.node(i)) is not None and node.parent != host for i in ids
+        ):
+            target = project.node(host)
+            try:
+                nested = move_into(project, ids, host)
+            except ValueError as exc:
+                self.refresh()
+                self.status_message.emit(str(exc))
+                return
+            self.document.apply(nested, "Put device inside host")
+            if target is not None:
+                self.status_message.emit(f"Now inside {target.name}.")
+            return
         first = project.node(ids[0]) if ids else None
         item = self.node_items.get(ids[0]) if ids else None
         if first is None or item is None:
@@ -379,6 +566,139 @@ class Canvas(QGraphicsView):
         else:
             self.refresh()  # the cards snap back to where the document says they are
             self.status_message.emit("That cell is taken.")
+
+    # ------------------------------------------------------------------------ cables
+
+    @property
+    def cable_tool(self) -> bool:
+        return self._cable_tool
+
+    def set_cable_tool(self, on: bool, medium: Medium | None = None) -> None:
+        """Switch the cable tool on or off. With it on, dragging from one card to another
+        (or clicking one and then the other) joins them instead of moving the card."""
+        if medium is not None:
+            self.cable_medium = medium
+        changed = on != self._cable_tool
+        self._cable_tool = on
+        self._cancel_cable()
+        self.viewport().setCursor(Qt.CursorShape.CrossCursor if on else Qt.CursorShape.ArrowCursor)
+        if changed:
+            self.tool_changed.emit()
+
+    def start_cable_from(self, node_id: str) -> None:
+        """Switch the tool on with one end already chosen (the context menu does this)."""
+        self.set_cable_tool(True)
+        self._cable_from = node_id
+        self.status_message.emit("Click the device to join it to. Escape cancels.")
+        self._backdrop.update()
+
+    def _cancel_cable(self) -> None:
+        self._cable_from = None
+        self._cable_press = None
+        self._cable_cursor = None
+        self._backdrop.update()
+
+    def pending_cable(self) -> tuple[QPointF, QPointF] | None:
+        """The rubber line of a cable being drawn: from its first card to the pointer."""
+        start = self._cable_press or self._cable_from
+        item = self.node_items.get(start) if start else None
+        if item is None or self._cable_cursor is None:
+            return None
+        return item.center(), self._cable_cursor
+
+    def _card_at(self, pos: QPoint) -> NodeItem | None:
+        for item in self.items(pos):
+            if isinstance(item, NodeItem):
+                return item
+        return None
+
+    def join(self, first: str, second: str) -> None:
+        before = self.document.project
+        try:
+            project, link_id = connect(before, first, second, self.cable_medium)
+        except ValueError as exc:
+            self.status_message.emit(str(exc))
+            return
+        names = [node.name for node in map(before.node, (first, second)) if node is not None]
+        self.document.apply(project, "Add cable")
+        # The new cable is the one to look at, so it is selected.
+        self.select_link(link_id)
+        self.status_message.emit(f"Joined {' and '.join(names)}.")
+
+    def _cable_press_event(self, event: QMouseEvent) -> None:
+        card = self._card_at(event.position().toPoint())
+        self._cable_press = card.node_id if card else None
+        self._cable_cursor = self.mapToScene(event.position().toPoint())
+
+    def _cable_release_event(self, event: QMouseEvent) -> None:
+        card = self._card_at(event.position().toPoint())
+        pressed, pending = self._cable_press, self._cable_from
+        self._cable_press = None
+        self._cable_cursor = None
+        if card is None:
+            # A click on the empty grid gives up the half-drawn cable.
+            self._cable_from = None
+            self._backdrop.update()
+            return
+        if pending is not None and pending != card.node_id:
+            self._cable_from = None
+            self.join(pending, card.node_id)
+        elif pressed is not None and pressed != card.node_id:
+            self._cable_from = None
+            self.join(pressed, card.node_id)
+        elif pressed == card.node_id and pending != card.node_id:
+            self._cable_from = card.node_id
+            self.status_message.emit("Click the device to join it to. Escape cancels.")
+        else:
+            self._cable_from = None
+        self._backdrop.update()
+
+    # ----------------------------------------------------------------- context menu
+
+    def node_menu(self, node_id: str) -> QMenu:
+        """The menu of a device, built but not shown, so it can be tested."""
+        project = self.document.project
+        node = project.node(node_id)
+        menu = QMenu(self)
+        if node is None:
+            return menu
+        kind = CATALOG.get(node.kind)
+        if kind and kind.contains:
+            menu.addAction("Open inside", lambda: self.enter(node_id)).setObjectName("open")
+            inside = menu.addMenu("Add inside")
+            inside.setObjectName("add-inside")
+            for key in sorted(kind.contains):
+                inside.addAction(
+                    CATALOG[key].label,
+                    lambda key=key: self.add_device_inside(node_id, key),  # type: ignore[misc]
+                )
+        menu.addAction("Cable from here…", lambda: self.start_cable_from(node_id)).setObjectName(
+            "cable"
+        )
+        menu.addSeparator()
+        menu.addAction("Rename…", lambda: self._act_on(node_id, self.rename_selected))
+        if node.parent is not None:
+            menu.addAction(
+                "Take out of its host", lambda: self._act_on(node_id, self.take_out)
+            ).setObjectName("take-out")
+        menu.addAction("Delete", lambda: self._act_on(node_id, self.delete_selected)).setObjectName(
+            "delete"
+        )
+        return menu
+
+    def _act_on(self, node_id: str, action: Callable[[], None]) -> None:
+        self.select_ids({node_id})
+        action()
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        card = self._card_at(event.pos())
+        if card is None:
+            super().contextMenuEvent(event)
+            return
+        if not card.isSelected():
+            self.select_ids({card.node_id})
+        self.node_menu(card.node_id).exec(event.globalPos())
+        event.accept()
 
     # ---------------------------------------------------------------------- the view
 
@@ -403,7 +723,7 @@ class Canvas(QGraphicsView):
         bounds = QRectF()
         for item in self.node_items.values():
             bounds = bounds.united(item.mapRectToScene(item.boundingRect()))
-        for zone in self.document.project.zones:
+        for zone in self.document.project.zones if self.view is None else ():
             x, y = cell_origin(zone.x, zone.y)
             bounds = bounds.united(QRectF(x, y, zone.width * CELL, zone.height * CELL))
         self.fitInView(
@@ -428,6 +748,22 @@ class Canvas(QGraphicsView):
             self.delete_selected()
         elif key == Qt.Key.Key_F2:
             self.rename_selected()
+        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            ids = self.selected_ids()
+            if len(ids) == 1 and self.can_enter(ids[0]):
+                self.enter(ids[0])
+            else:
+                super().keyPressEvent(event)
+                return
+        elif key == Qt.Key.Key_Escape:
+            if self._cable_from is not None or self._cable_press is not None:
+                self._cancel_cable()
+            elif self._cable_tool:
+                self.set_cable_tool(False)
+            elif self.selected_link is not None:
+                self.select_link(None)
+            else:
+                self.leave()
         elif key == Qt.Key.Key_A and modifiers & Qt.KeyboardModifier.ControlModifier:
             self.select_all()
         elif key in arrows and not modifiers & Qt.KeyboardModifier.ControlModifier:
@@ -463,6 +799,10 @@ class Canvas(QGraphicsView):
         )
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        if self._cable_tool and event.button() == Qt.MouseButton.LeftButton:
+            self._cable_press_event(event)
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.MiddleButton:
             self._panning = True
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
@@ -470,8 +810,18 @@ class Canvas(QGraphicsView):
             event.accept()
             return
         super().mousePressEvent(event)
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._card_at(event.position().toPoint()) is None
+        ):
+            self.select_link(self.link_at(self.mapToScene(event.position().toPoint())))
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._cable_tool and (self._cable_press or self._cable_from):
+            self._cable_cursor = self.mapToScene(event.position().toPoint())
+            self._backdrop.update()
+            event.accept()
+            return
         if self._panning:
             super().mouseMoveEvent(self._as_left_button(event))
             event.accept()
@@ -485,9 +835,13 @@ class Canvas(QGraphicsView):
             self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
             event.accept()
             return
+        if self._cable_tool and event.button() == Qt.MouseButton.LeftButton:
+            self._cable_release_event(event)
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
         if event.button() == Qt.MouseButton.LeftButton:
-            self._commit_drag()
+            self._commit_drag(event.position().toPoint())
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
@@ -516,3 +870,19 @@ class Canvas(QGraphicsView):
         spot = self.mapToScene(event.position().toPoint())
         self.add_device(key, *cell_at(spot.x(), spot.y()))
         event.acceptProposedAction()
+
+
+def _distance_to_segment(point: QPointF, start: QPointF, end: QPointF) -> float:
+    line = QLineF(start, end)
+    length = line.length()
+    if length == 0:
+        return QLineF(point, start).length()
+    along = (
+        (point.x() - start.x()) * (end.x() - start.x())
+        + (point.y() - start.y()) * (end.y() - start.y())
+    ) / (length * length)
+    along = max(0.0, min(1.0, along))
+    nearest = QPointF(
+        start.x() + along * (end.x() - start.x()), start.y() + along * (end.y() - start.y())
+    )
+    return QLineF(point, nearest).length()

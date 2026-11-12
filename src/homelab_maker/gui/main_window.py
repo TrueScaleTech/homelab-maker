@@ -7,11 +7,13 @@ from PySide6.QtCore import QByteArray, Qt
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDockWidget,
     QFileDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QToolBar,
 )
 
 from homelab_maker import __version__, settings
@@ -19,15 +21,17 @@ from homelab_maker.document import Document
 from homelab_maker.gui import qt_theme
 from homelab_maker.gui.canvas import Canvas
 from homelab_maker.gui.icons import app_icon
+from homelab_maker.gui.inspector import Inspector
 from homelab_maker.gui.palette import Palette
 from homelab_maker.gui.theme import Scheme
-from homelab_maker.model import Project
+from homelab_maker.model import Medium, Project
 from homelab_maker.storage import ProjectFileError, load, save
 from homelab_maker.viewmodel import (
     APP_NAME,
     PROJECT_SUFFIX,
     project_path,
     status_text,
+    trail_text,
     window_title,
 )
 
@@ -60,6 +64,13 @@ class MainWindow(QMainWindow):
         dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
 
+        self.inspector = Inspector(self.document, self.canvas)
+        details = QDockWidget("Details", self)
+        details.setObjectName("details-dock")
+        details.setWidget(self.inspector)
+        details.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, details)
+
         self._counts = QLabel()
         self.statusBar().addPermanentWidget(self._counts)
         self.setWindowIcon(app_icon())
@@ -67,10 +78,13 @@ class MainWindow(QMainWindow):
 
         self._build_actions()
         self._build_menus()
+        self._build_toolbar()
 
         self.device_list.kind_chosen.connect(self.canvas.add_at_center)
         self.canvas.status_message.connect(lambda text: self.statusBar().showMessage(text, 5000))
         self.canvas.selection_changed.connect(self._update_ui)
+        self.canvas.view_changed.connect(self._update_ui)
+        self.canvas.tool_changed.connect(self._update_ui)
         self.document.subscribe(self._update_ui)
 
         if self.preferences.geometry:
@@ -107,6 +121,11 @@ class MainWindow(QMainWindow):
         self.zoom_reset_action = self._action("&Actual size", self.canvas.zoom_reset, "Ctrl+0")
         self.zoom_fit_action = self._action("&Fit everything", self.canvas.zoom_fit, "Ctrl+1")
         self.about_action = self._action(f"&About {APP_NAME}", self.about)
+        self.up_action = self._action("&Up", self.canvas.leave, "Alt+Up")
+        self.open_inside_action = self._action("Open &inside", self._open_selected, "Alt+Down")
+        self.take_out_action = self._action("&Take out of its host", self.canvas.take_out)
+        self.cable_action = self._action("&Cable tool", self._toggle_cable_tool, "Ctrl+K")
+        self.cable_action.setCheckable(True)
 
     def _build_menus(self) -> None:
         bar = self.menuBar()
@@ -121,6 +140,9 @@ class MainWindow(QMainWindow):
         edit_menu.addActions([self.undo_action, self.redo_action])
         edit_menu.addSeparator()
         edit_menu.addActions([self.rename_action, self.delete_action, self.select_all_action])
+        edit_menu.addSeparator()
+        edit_menu.addActions([self.cable_action, self.open_inside_action])
+        edit_menu.addActions([self.take_out_action, self.up_action])
 
         view_menu = bar.addMenu("&View")
         view_menu.addActions(
@@ -145,6 +167,37 @@ class MainWindow(QMainWindow):
 
         bar.addMenu("&Help").addAction(self.about_action)
 
+    def _build_toolbar(self) -> None:
+        bar = QToolBar("Navigation", self)
+        bar.setObjectName("navigation")
+        bar.setMovable(False)
+        bar.addAction(self.up_action)
+        self.trail_label = QLabel()
+        self.trail_label.setObjectName("trail")
+        self.trail_label.setContentsMargins(8, 0, 16, 0)
+        bar.addWidget(self.trail_label)
+        bar.addSeparator()
+        bar.addAction(self.cable_action)
+        self.medium_box = QComboBox()
+        self.medium_box.setObjectName("medium")
+        for medium in Medium:
+            self.medium_box.addItem(medium.value, medium)
+        self.medium_box.currentIndexChanged.connect(self._medium_chosen)
+        bar.addWidget(self.medium_box)
+        self.addToolBar(bar)
+
+    def _medium_chosen(self) -> None:
+        # Qt hands a string enum back as a plain string.
+        self.canvas.cable_medium = Medium(self.medium_box.currentText())
+
+    def _toggle_cable_tool(self) -> None:
+        self.canvas.set_cable_tool(self.cable_action.isChecked())
+
+    def _open_selected(self) -> None:
+        ids = self.canvas.selected_ids()
+        if len(ids) == 1:
+            self.canvas.enter(ids[0])
+
     def _update_ui(self) -> None:
         doc = self.document
         self.setWindowTitle(window_title(doc.path, doc.dirty))
@@ -153,7 +206,14 @@ class MainWindow(QMainWindow):
         self.undo_action.setText(f"&Undo {doc.undo_label}" if doc.undo_label else "&Undo")
         self.redo_action.setText(f"&Redo {doc.redo_label}" if doc.redo_label else "&Redo")
         selected = self.canvas.selected_ids()
-        self.delete_action.setEnabled(bool(selected))
+        self.delete_action.setEnabled(bool(selected) or self.canvas.selected_link is not None)
+        self.up_action.setEnabled(self.canvas.view is not None)
+        self.take_out_action.setEnabled(bool(selected) and self.canvas.view is not None)
+        self.open_inside_action.setEnabled(
+            len(selected) == 1 and self.canvas.can_enter(selected[0])
+        )
+        self.cable_action.setChecked(self.canvas.cable_tool)
+        self.trail_label.setText(trail_text(doc.project, self.canvas.view))
         self.rename_action.setEnabled(len(selected) == 1)
         self._counts.setText(status_text(doc.project, len(selected)))
 
