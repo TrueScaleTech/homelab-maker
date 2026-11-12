@@ -1,0 +1,3 @@
+# Every text file is checked out with LF, on every platform. Project files are written
+# with LF, and the shipped examples are compared byte for byte with a fresh save.
+* text=auto eol=lf
