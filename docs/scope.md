@@ -113,7 +113,7 @@ first and replaces the old one only when the new one is complete.
 | --- | --- |
 | **M0** | This page, repository scaffold, tooling, CI, git identity. |
 | **M1** (done) | Catalogue, model, structural checks and project file, pure and tested. No window. An invented example project ships in `examples/`. |
-| **M2** | The canvas: grid, placing devices from the catalogue, moving, selecting, undo and redo, save and load. First packaged build on a provisional tag, to find packaging problems while there is little code. |
+| **M2** (done) | The canvas: grid, placing devices from the catalogue, moving, selecting, renaming, deleting, undo and redo, save and load, zoom and pan, light and dark themes. A Windows build script and a release workflow whose packaged program checks itself (`--smoke-test`) before anything is attached to a draft pre-release. |
 | **M3** | Nesting (host, virtual machine, container, service), ports and links. |
 | **M4** | Interfaces, addresses, VLANs, and the automatic checks (duplicate addresses, ports over capacity, trunk and VLAN mismatches). |
 | **M5** | Flows, reachability analysis, the "what goes down" view, and the animation of a packet along its path. |

@@ -37,6 +37,33 @@ CI runs the same four on Linux and Windows, for Python 3.11, 3.12 and 3.13.
   import Qt. The widgets only draw what they decided.
 - **Comments** explain why, not what. Every `noqa` or lint exception says why.
 
+## How the code is divided
+
+- `model.py`, `catalog.py`, `validation.py`, `storage.py`: the homelab as immutable values,
+  what each kind of device is, the consistency rules, and the project file. No Qt.
+- `operations.py`, `document.py`: every edit is a pure function from one project to
+  another, and the document keeps the undo history. No Qt.
+- `viewmodel.py`, `grid.py`, `settings.py`: what the window says and where things sit. No Qt.
+- `gui/`: the window. `theme.py` holds every colour (as plain strings, so contrast is
+  tested), `icons.py` draws every icon on one 24-unit grid, `canvas.py` turns gestures into
+  calls to `operations`, `main_window.py` owns the menus and the files.
+
+Put a new decision in the modules without Qt, and keep the widgets a layer that draws it.
+Never hard-code a colour in a widget: one of the two themes will go wrong and the contrast
+tests will not be watching it. Add an icon in `gui/icons.py` rather than reaching for a
+character from a font.
+
+## Testing the window
+
+`tests/helpers.py` sends real mouse, wheel and drop events to the canvas, and the tests
+use key presses and double-clicks as a person would, rather than calling the canvas's
+methods. That is how a dead button or a card that does not snap is found. Close what you
+open: the `window` fixture does it, and widgets that pile up make the suite slow. Modal
+dialogs are replaced in the tests so that nothing waits for a click.
+
+Qt's invisible platform has no fonts, so labels render as boxes in a screenshot taken
+there. `tools/make_screenshots.py` takes a font file for exactly that reason.
+
 ## What belongs here, and what does not
 
 HomeLabMaker draws a model and answers questions about it. Features that emulate device
