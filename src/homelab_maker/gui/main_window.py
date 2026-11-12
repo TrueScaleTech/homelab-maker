@@ -78,7 +78,7 @@ class MainWindow(QMainWindow):
 
         self.findings = FindingsPanel(self.document, self.tokens)
         self.findings.reveal = self.canvas.reveal
-        checks = QDockWidget("Checks", self)
+        self.checks_dock = checks = QDockWidget("Checks", self)
         checks.setObjectName("checks-dock")
         checks.setWidget(self.findings)
         checks.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
@@ -86,7 +86,7 @@ class MainWindow(QMainWindow):
         self.findings.counted.connect(lambda _count: self._update_ui())
 
         self.flows_panel = FlowsPanel(self.document, self.canvas, self.tokens)
-        flows = QDockWidget("Flows", self)
+        self.flows_dock = flows = QDockWidget("Flows", self)
         flows.setObjectName("flows-dock")
         flows.setWidget(self.flows_panel)
         flows.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
@@ -102,6 +102,9 @@ class MainWindow(QMainWindow):
         self._build_actions()
         self._build_menus()
         self._build_toolbar()
+        # The drawing gets the room: the lists beside it and below it stay compact.
+        self.resizeDocks([dock, details], [200, 400], Qt.Orientation.Horizontal)
+        self.resizeDocks([checks], [300], Qt.Orientation.Vertical)
 
         self.device_list.kind_chosen.connect(self.canvas.add_at_center)
         self.canvas.status_message.connect(lambda text: self.statusBar().showMessage(text, 5000))

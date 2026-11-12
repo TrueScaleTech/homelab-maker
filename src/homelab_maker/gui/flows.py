@@ -124,6 +124,9 @@ class FlowsPanel(QWidget):
             "Not modelled: " + "; ".join(NOT_MODELLED) + "."
         )
         self.caveat.setObjectName("flow-caveat")
+        small = self.caveat.font()
+        small.setPointSizeF(small.pointSizeF() - 1)
+        self.caveat.setFont(small)
         self.caveat.setWordWrap(True)
 
         buttons = QHBoxLayout()

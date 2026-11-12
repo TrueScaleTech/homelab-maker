@@ -93,7 +93,7 @@ class Inspector(QWidget):
         self.ports.verticalHeader().setVisible(False)
         self.ports.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.ports.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.ports.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.ports.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.ports.horizontalHeader().setStretchLastSection(True)
         self.ports.itemChanged.connect(self._item_changed)
         self.ports.itemSelectionChanged.connect(self._update_buttons)
@@ -144,7 +144,7 @@ class Inspector(QWidget):
         table.verticalHeader().setVisible(False)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         table.horizontalHeader().setStretchLastSection(True)
         return table
 

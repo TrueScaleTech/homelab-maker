@@ -20,8 +20,10 @@ from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import QApplication
 
 from homelab_maker.gui.main_window import MainWindow
+from homelab_maker.outage import what_goes_down
 
 EXAMPLE = Path(__file__).parent.parent / "examples" / "small-homelab.homelab.json"
+CAMERA_FLOW, DASHBOARD_FLOW = 0, 2  # rows of the flows table, which is sorted by id
 
 
 def main(output: Path, font_file: Path | None) -> None:
@@ -34,21 +36,71 @@ def main(output: Path, font_file: Path | None) -> None:
         app.setFont(QFont(families[0], 9))
 
     window = MainWindow()
-    window.resize(1280, 760)
+    window.resize(1500, 900)
     window.show()
     app.processEvents()
     if not window.open_path(EXAMPLE):
         raise SystemExit("could not open the example")
-    window.canvas.select_ids({"nas"})
     output.mkdir(parents=True, exist_ok=True)
-    for scheme in ("light", "dark"):
-        window.set_scheme(scheme)  # type: ignore[arg-type]
-        window.canvas.zoom_fit()
+
+    def shoot(name: str) -> None:
         app.processEvents()
-        target = output / f"homelabmaker-{scheme}.png"
+        target = output / f"{name}.png"
         if not window.grab().save(str(target)):
             raise SystemExit(f"could not write {target}")
         print(f"wrote {target}")
+
+    def reset() -> None:
+        window.canvas.set_offline(frozenset())
+        window.flows_panel.table.clearSelection()
+        window.canvas.go_to(None)
+        window.canvas.select_ids(set())
+        window.canvas.zoom_fit()
+
+    for scheme in ("light", "dark"):
+        window.set_scheme(scheme)  # type: ignore[arg-type]
+        reset()
+        window.canvas.select_ids({"nas"})
+        window.checks_dock.raise_()
+        shoot(f"overview-{scheme}")
+
+    window.set_scheme("light")
+    reset()
+    window.canvas.select_ids({"switch"})
+    window.inspector.tabs.setCurrentIndex(0)
+    shoot("ports")
+
+    reset()
+    window.canvas.enter("nas")
+    window.canvas.select_ids({"home-assistant"})
+    window.inspector.tabs.setCurrentIndex(1)
+    shoot("inside-a-host")
+
+    reset()
+    window.flows_dock.raise_()
+    window.flows_panel.table.selectRow(CAMERA_FLOW)
+    shoot("flow-blocked")
+
+    reset()
+    window.flows_dock.raise_()
+    window.flows_panel.table.selectRow(DASHBOARD_FLOW)
+    window.flows_panel.play_button.setChecked(True)
+    window.canvas.advance_packet(0.55)
+    shoot("flow-reachable")
+    window.flows_panel.play_button.setChecked(False)
+
+    reset()
+    window.canvas.select_ids({"gateway"})
+    window.inspector.tabs.setCurrentIndex(2)
+    shoot("rules")
+
+    reset()
+    window.canvas.select_ids({"switch"})
+    outage = what_goes_down(window.document.project, ["switch"])
+    window.canvas.set_offline(frozenset(outage.stopped))
+    window.checks_dock.raise_()
+    shoot("what-goes-down")
+
     window.deleteLater()
 
 

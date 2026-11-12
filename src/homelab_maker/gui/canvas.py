@@ -303,6 +303,7 @@ class Canvas(QGraphicsView):
 
     def drawForeground(self, painter: QPainter, area: QRectF | QRect) -> None:
         if self.node_items:
+            self.paint_flow_marks(painter)
             return
         painter.setPen(QColor(self.tokens.text_muted))
         font = painter.font()
@@ -650,7 +651,7 @@ class Canvas(QGraphicsView):
     def paint_flow(self, painter: QPainter) -> None:
         if self._flow is None:
             return
-        _, ok, stopped = self._flow
+        _, ok, _ = self._flow
         tokens = self.tokens
         colour = QColor(tokens.ok if ok else tokens.danger)
         points = self.flow_points()
@@ -677,18 +678,26 @@ class Canvas(QGraphicsView):
                 )
             )
             painter.drawPolyline(points)
+
+    def paint_flow_marks(self, painter: QPainter) -> None:
+        """The cross where a flow stops and the packet: drawn over the cards, not under."""
+        if self._flow is None:
+            return
+        _, ok, stopped = self._flow
+        tokens = self.tokens
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         where = self.stop_point(stopped)
         if where is not None:
-            painter.setPen(QPen(QColor(tokens.danger), 3))
+            painter.setPen(QPen(QColor(tokens.danger), 4))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawEllipse(where, 30, 30)
-            painter.drawLine(where + QPointF(-12, -12), where + QPointF(12, 12))
-            painter.drawLine(where + QPointF(12, -12), where + QPointF(-12, 12))
+            painter.drawEllipse(where, 34, 34)
+            painter.drawLine(where + QPointF(-14, -14), where + QPointF(14, 14))
+            painter.drawLine(where + QPointF(14, -14), where + QPointF(-14, 14))
         packet = self.packet_position()
         if packet is not None:
             painter.setPen(QPen(QColor(tokens.card), 2))
-            painter.setBrush(colour)
-            painter.drawEllipse(packet, 7, 7)
+            painter.setBrush(QColor(tokens.ok if ok else tokens.danger))
+            painter.drawEllipse(packet, 8, 8)
 
     def stop_point(self, stopped: str | None) -> QPointF | None:
         """Where a blocked flow stops: on a device's card, or in the middle of a cable."""
