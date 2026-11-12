@@ -24,6 +24,7 @@ from homelab_maker.model import (
     Protocol,
     Rule,
     Service,
+    Zone,
     is_network,
     new_node,
     node_routes,
@@ -576,3 +577,48 @@ def move_rule(project: Project, node_id: str, index: int, delta: int) -> Project
     rules = list(node.rules)
     rules[index], rules[target] = rules[target], rules[index]
     return replace_node(project, replace(node, rules=tuple(rules)))
+
+
+# ------------------------------------------------------------------------ zones, name
+
+
+def zone_around(
+    project: Project, node_ids: Collection[str], name: str, margin: int = 0
+) -> tuple[Project, str]:
+    """Draw a zone around devices on the canvas. Returns the project and the zone id.
+
+    The zone covers the cells of the chosen devices, widened by ``margin`` cells on every
+    side. Only devices on the canvas itself can be grouped: what is inside a host moves
+    with its host.
+    """
+    chosen = [n for n in project.nodes if n.id in node_ids]
+    if not chosen:
+        raise ValueError("choose the devices the zone should surround")
+    if any(n.parent is not None for n in chosen):
+        raise ValueError("a zone surrounds devices on the canvas, not what is inside a host")
+    name = name.strip()
+    if not name:
+        raise ValueError("a zone needs a name")
+    left, right = min(n.x for n in chosen) - margin, max(n.x for n in chosen) + margin
+    top, bottom = min(n.y for n in chosen) - margin, max(n.y for n in chosen) + margin
+    zone_id = unique_id([z.id for z in project.zones], slugify(name))
+    zone = Zone(zone_id, name, left, top, right - left + 1, bottom - top + 1)
+    return replace(project, zones=(*project.zones, zone)), zone_id
+
+
+def remove_zone(project: Project, zone_id: str) -> Project:
+    if all(z.id != zone_id for z in project.zones):
+        raise ValueError(f"there is no zone {zone_id!r}")
+    return replace(project, zones=tuple(z for z in project.zones if z.id != zone_id))
+
+
+def rename_zone(project: Project, zone_id: str, name: str) -> Project:
+    zone = next((z for z in project.zones if z.id == zone_id), None)
+    if zone is None:
+        raise ValueError(f"there is no zone {zone_id!r}")
+    renamed = replace(zone, name=name.strip())
+    return replace(project, zones=tuple(renamed if z.id == zone_id else z for z in project.zones))
+
+
+def rename_project(project: Project, name: str) -> Project:
+    return replace(project, name=name.strip())

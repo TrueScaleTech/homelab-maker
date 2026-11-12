@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDockWidget,
     QFileDialog,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -29,6 +30,7 @@ from homelab_maker.gui.inspector import Inspector
 from homelab_maker.gui.palette import Palette
 from homelab_maker.gui.theme import Scheme
 from homelab_maker.model import Medium, Project
+from homelab_maker.operations import remove_zone, rename_project, zone_around
 from homelab_maker.outage import describe, what_goes_down
 from homelab_maker.storage import ProjectFileError, load, save
 from homelab_maker.viewmodel import (
@@ -157,6 +159,9 @@ class MainWindow(QMainWindow):
         self.take_out_action = self._action("&Take out of its host", self.canvas.take_out)
         self.cable_action = self._action("&Cable tool", self._toggle_cable_tool, "Ctrl+K")
         self.cable_action.setCheckable(True)
+        self.add_zone_action = self._action("Add a &zone around the selection…", self.add_zone)
+        self.remove_zone_action = self._action("Remove a z&one…", self.remove_a_zone)
+        self.rename_project_action = self._action("&Name of the homelab…", self.rename_homelab)
         self.add_flow_action = self._action("Add &flow…", self.flows_panel.ask_for_flow, "Ctrl+L")
         self.outage_action = self._action(
             "What goes &down if I switch off the selection…", self.show_outage, "Ctrl+Shift+D"
@@ -184,6 +189,11 @@ class MainWindow(QMainWindow):
         edit_menu.addActions([self.rename_action, self.delete_action, self.select_all_action])
         edit_menu.addSeparator()
         edit_menu.addActions([self.cable_action, self.open_inside_action])
+        edit_menu.addSeparator()
+        edit_menu.addActions(
+            [self.add_zone_action, self.remove_zone_action, self.rename_project_action]
+        )
+        edit_menu.addSeparator()
         edit_menu.addActions([self.take_out_action, self.up_action])
 
         view_menu = bar.addMenu("&View")
@@ -245,6 +255,49 @@ class MainWindow(QMainWindow):
         if len(ids) == 1:
             self.canvas.enter(ids[0])
 
+    def add_zone(self) -> None:
+        """Draw a zone (LAN, IoT, guests...) around the selected devices."""
+        ids = self.canvas.selected_ids()
+        if not ids:
+            self.statusBar().showMessage("Select the devices the zone should surround.", 5000)
+            return
+        name, accepted = QInputDialog.getText(self, "Add a zone", "Name of the zone:")
+        if not accepted:
+            return
+        try:
+            project, _ = zone_around(self.document.project, ids, name, margin=1)
+        except ValueError as exc:
+            self.statusBar().showMessage(str(exc), 5000)
+            return
+        self.document.apply(project, "Add zone")
+
+    def remove_a_zone(self) -> None:
+        zones = self.document.project.zones
+        if not zones:
+            self.statusBar().showMessage("There is no zone to remove.", 5000)
+            return
+        names = [zone.name for zone in zones]
+        chosen, accepted = QInputDialog.getItem(self, "Remove a zone", "Zone:", names, 0, False)
+        if accepted and chosen in names:
+            zone = zones[names.index(chosen)]
+            self.document.apply(remove_zone(self.document.project, zone.id), "Remove zone")
+
+    def rename_homelab(self) -> None:
+        name, accepted = QInputDialog.getText(
+            self,
+            "Name of the homelab",
+            "Name:",
+            text=self.document.project.name,
+        )
+        if not accepted:
+            return
+        try:
+            project = rename_project(self.document.project, name)
+        except ValueError as exc:
+            self.statusBar().showMessage(str(exc), 5000)
+            return
+        self.document.apply(project, "Rename homelab")
+
     def show_outage(self) -> None:
         """Switch off the selected devices on the drawing and say what stops working."""
         ids = self.canvas.selected_ids()
@@ -281,6 +334,8 @@ class MainWindow(QMainWindow):
         )
         self.cable_action.setChecked(self.canvas.cable_tool)
         self.outage_action.setEnabled(bool(selected))
+        self.add_zone_action.setEnabled(bool(selected) and self.canvas.view is None)
+        self.remove_zone_action.setEnabled(bool(doc.project.zones))
         self.back_to_normal_action.setEnabled(bool(self.canvas.offline))
         self.trail_label.setText(trail_text(doc.project, self.canvas.view))
         self.rename_action.setEnabled(len(selected) == 1)
