@@ -10,16 +10,23 @@ from dataclasses import replace
 
 from homelab_maker.catalog import CATALOG
 from homelab_maker.model import (
+    ANY,
     GRID_LIMIT,
     PHYSICAL_MEDIA,
     Endpoint,
+    Flow,
     Interface,
     InterfaceMode,
     Link,
     Medium,
     Node,
     Project,
+    Protocol,
+    Rule,
+    Service,
+    is_network,
     new_node,
+    node_routes,
     slugify,
     unique_id,
 )
@@ -447,3 +454,125 @@ def remove_interface(project: Project, node_id: str, name: str) -> Project:
         raise ValueError(f"{name} of {node.name} has a cable; remove the cable first")
     kept = tuple(i for i in node.interfaces if i.name != name)
     return replace_node(project, replace(node, interfaces=kept))
+
+
+# ------------------------------------------------------------------ flows and services
+
+
+def add_flow(
+    project: Project,
+    source: str,
+    destination: str,
+    port: int,
+    protocol: Protocol = Protocol.TCP,
+    description: str = "",
+) -> tuple[Project, str]:
+    """State that one device talks to a port of another. Returns the project and the flow id."""
+    for node_id in (source, destination):
+        if project.node(node_id) is None:
+            raise ValueError(f"there is no node {node_id!r}")
+    if source == destination:
+        raise ValueError("a device does not need a flow to itself")
+    flow_id = unique_id(
+        [flow.id for flow in project.flows], slugify(f"{source}-{destination}-{port}")
+    )
+    flow = Flow(flow_id, source, destination, port, protocol, description.strip())
+    return replace(project, flows=(*project.flows, flow)), flow_id
+
+
+def remove_flows(project: Project, flow_ids: Collection[str]) -> Project:
+    known = {flow.id for flow in project.flows}
+    missing = sorted(set(flow_ids) - known)
+    if missing:
+        raise ValueError(f"there is no flow {missing[0]!r}")
+    return replace(project, flows=tuple(f for f in project.flows if f.id not in flow_ids))
+
+
+def add_service(
+    project: Project, node_id: str, name: str, port: int, protocol: Protocol = Protocol.TCP
+) -> Project:
+    node = project.node(node_id)
+    if node is None:
+        raise ValueError(f"there is no node {node_id!r}")
+    service = Service(name.strip(), port, protocol)
+    if any((s.port, s.protocol) == (port, protocol) for s in node.services):
+        raise ValueError(f"{node.name} already listens on {protocol.value}/{port}")
+    return replace_node(project, replace(node, services=(*node.services, service)))
+
+
+def remove_service(project: Project, node_id: str, index: int) -> Project:
+    node = project.node(node_id)
+    if node is None:
+        raise ValueError(f"there is no node {node_id!r}")
+    if not 0 <= index < len(node.services):
+        raise ValueError(f"{node.name} has no service number {index + 1}")
+    kept = tuple(s for i, s in enumerate(node.services) if i != index)
+    return replace_node(project, replace(node, services=kept))
+
+
+def replace_service(project: Project, node_id: str, index: int, service: Service) -> Project:
+    """Swap one service of a node for another (editing a cell builds a new service)."""
+    node = project.node(node_id)
+    if node is None:
+        raise ValueError(f"there is no node {node_id!r}")
+    if not 0 <= index < len(node.services):
+        raise ValueError(f"{node.name} has no service number {index + 1}")
+    others = [s for i, s in enumerate(node.services) if i != index]
+    if any((s.port, s.protocol) == (service.port, service.protocol) for s in others):
+        raise ValueError(f"{node.name} already listens on {service.protocol.value}/{service.port}")
+    services = tuple(service if i == index else s for i, s in enumerate(node.services))
+    return replace_node(project, replace(node, services=services))
+
+
+# ------------------------------------------------------------------------------ rules
+
+
+def _routing_node(project: Project, node_id: str) -> Node:
+    node = project.node(node_id)
+    if node is None:
+        raise ValueError(f"there is no node {node_id!r}")
+    if not node_routes(node):
+        raise ValueError(f"{node.name} does not route traffic, so rules would never apply")
+    return node
+
+
+def _known_reference(project: Project, rule: Rule) -> None:
+    for reference in (rule.source, rule.destination):
+        if reference != ANY and not is_network(reference) and project.node(reference) is None:
+            raise ValueError(f"a rule cannot name {reference!r}: there is no such device")
+
+
+def add_rule(project: Project, node_id: str, rule: Rule) -> Project:
+    """Add a rule at the end of a routing device's list (rules are tried in order)."""
+    node = _routing_node(project, node_id)
+    _known_reference(project, rule)
+    return replace_node(project, replace(node, rules=(*node.rules, rule)))
+
+
+def replace_rule(project: Project, node_id: str, index: int, rule: Rule) -> Project:
+    node = _routing_node(project, node_id)
+    if not 0 <= index < len(node.rules):
+        raise ValueError(f"{node.name} has no rule number {index + 1}")
+    _known_reference(project, rule)
+    rules = tuple(rule if i == index else r for i, r in enumerate(node.rules))
+    return replace_node(project, replace(node, rules=rules))
+
+
+def remove_rule(project: Project, node_id: str, index: int) -> Project:
+    node = _routing_node(project, node_id)
+    if not 0 <= index < len(node.rules):
+        raise ValueError(f"{node.name} has no rule number {index + 1}")
+    return replace_node(
+        project, replace(node, rules=tuple(r for i, r in enumerate(node.rules) if i != index))
+    )
+
+
+def move_rule(project: Project, node_id: str, index: int, delta: int) -> Project:
+    """Move a rule up (``delta`` -1) or down (+1): earlier rules win."""
+    node = _routing_node(project, node_id)
+    target = index + delta
+    if not (0 <= index < len(node.rules) and 0 <= target < len(node.rules)):
+        raise ValueError("that rule cannot move any further")
+    rules = list(node.rules)
+    rules[index], rules[target] = rules[target], rules[index]
+    return replace_node(project, replace(node, rules=tuple(rules)))

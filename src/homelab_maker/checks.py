@@ -10,6 +10,7 @@ Like everything outside ``gui`` this knows nothing about the window.
 
 import ipaddress
 from collections import defaultdict
+from collections.abc import Collection
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -248,12 +249,13 @@ def adjacency(project: Project) -> dict[str, set[str]]:
     return graph
 
 
-def _reach(graph: dict[str, set[str]], start: str, removed: str | None = None) -> set[str]:
+def reach(graph: dict[str, set[str]], start: str, removed: Collection[str] = ()) -> set[str]:
+    """The devices joined to ``start``, not counting any path through a removed device."""
     seen = {start}
     frontier = [start]
     while frontier:
         for neighbour in graph[frontier.pop()]:
-            if neighbour != removed and neighbour not in seen:
+            if neighbour not in removed and neighbour not in seen:
                 seen.add(neighbour)
                 frontier.append(neighbour)
     return seen
@@ -264,7 +266,7 @@ def _components(graph: dict[str, set[str]], removed: str) -> list[set[str]]:
     left = set(graph) - {removed}
     groups = []
     while left:
-        group = _reach(graph, min(left), removed=removed)
+        group = reach(graph, min(left), removed={removed})
         groups.append(group)
         left -= group
     return groups
@@ -280,8 +282,8 @@ def _single_points_of_failure(project: Project) -> list[Finding]:
         if node_id == internet:
             continue
         if internet is not None:
-            kept = _reach(graph, internet, removed=node_id)
-            stranded = sorted(_reach(graph, internet) - kept - {node_id})
+            kept = reach(graph, internet, removed={node_id})
+            stranded = sorted(reach(graph, internet) - kept - {node_id})
             to = _name(project, internet)
         else:
             groups = sorted(_components(graph, node_id), key=lambda g: (-len(g), sorted(g)))
