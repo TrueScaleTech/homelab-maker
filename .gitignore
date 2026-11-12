@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.tox/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Packaging output
+*.spec
+*.AppImage
+*.deb
+*.msi
+
+# A project file describes a real network: its address plan, its services, how it is
+# segmented. Your own diagrams must never be committed. The synthetic ones that ship
+# with the repository live in /examples/ and are not ignored.
+# Anchored to the repository root so that a rule never swallows a directory of the
+# package itself.
+/projects/
+/data/
+*.local.*
+.env
+.env.*
+!.env.example
+
+# OS and editors
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
