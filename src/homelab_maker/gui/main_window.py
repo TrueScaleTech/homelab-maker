@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from homelab_maker import __version__, settings
 from homelab_maker.checks import Severity
 from homelab_maker.document import Document
+from homelab_maker.export import to_drawio, to_markdown
 from homelab_maker.gui import qt_theme
 from homelab_maker.gui.canvas import Canvas
 from homelab_maker.gui.findings import FindingsPanel
@@ -130,6 +131,11 @@ class MainWindow(QMainWindow):
         self.open_action = self._action("&Open…", self.open_document, std.Open)
         self.save_action = self._action("&Save", self.save, std.Save)
         self.save_as_action = self._action("Save &as…", self.save_as, std.SaveAs)
+        self.export_image_action = self._action("Export an &image (PNG or SVG)…", self.export_image)
+        self.export_markdown_action = self._action(
+            "Export the &documentation (Markdown)…", self.export_markdown
+        )
+        self.export_drawio_action = self._action("Export a &draw.io diagram…", self.export_drawio)
         self.quit_action = self._action("&Quit", self.close, "Ctrl+Q")
         self.undo_action = self._action("&Undo", self.undo, std.Undo)
         self.redo_action = self._action("&Redo", self.redo, std.Redo)
@@ -162,6 +168,10 @@ class MainWindow(QMainWindow):
         file_menu.addActions([self.new_action, self.open_action])
         file_menu.addSeparator()
         file_menu.addActions([self.save_action, self.save_as_action])
+        file_menu.addSeparator()
+        file_menu.addActions(
+            [self.export_image_action, self.export_markdown_action, self.export_drawio_action]
+        )
         file_menu.addSeparator()
         file_menu.addAction(self.quit_action)
 
@@ -371,6 +381,50 @@ class MainWindow(QMainWindow):
         self.document.mark_saved(path)
         self._remember_directory(path)
         self.statusBar().showMessage(f"Saved {path.name}", 5000)
+        return True
+
+    # ------------------------------------------------------------------------ exports
+
+    def _export_target(self, title: str, suffix: str, filter_text: str) -> Path | None:
+        name = self.document.path.name if self.document.path else "homelab"
+        start = str(
+            Path(self.preferences.last_directory) / (name.removesuffix(PROJECT_SUFFIX) + suffix)
+        )
+        chosen, _ = QFileDialog.getSaveFileName(self, title, start, filter_text)
+        if not chosen:
+            return None
+        path = Path(chosen)
+        return path if path.suffix else path.with_suffix(suffix)
+
+    def _write_text(self, path: Path, text: str) -> bool:
+        try:
+            path.write_text(text, encoding="utf-8", newline="\n")
+        except OSError as exc:
+            QMessageBox.critical(self, "Cannot export", f"{path.name}: {exc.strerror or exc}")
+            return False
+        self.statusBar().showMessage(f"Exported {path.name}", 5000)
+        return True
+
+    def export_markdown(self) -> bool:
+        path = self._export_target("Export the documentation", ".md", "Markdown (*.md)")
+        return path is not None and self._write_text(path, to_markdown(self.document.project))
+
+    def export_drawio(self) -> bool:
+        path = self._export_target("Export a draw.io diagram", ".drawio", "draw.io (*.drawio)")
+        return path is not None and self._write_text(path, to_drawio(self.document.project))
+
+    def export_image(self) -> bool:
+        path = self._export_target(
+            "Export an image", ".png", "PNG image (*.png);;SVG image (*.svg)"
+        )
+        if path is None:
+            return False
+        try:
+            self.canvas.save_image(path)
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Cannot export", f"{path.name}: {exc}")
+            return False
+        self.statusBar().showMessage(f"Exported {path.name}", 5000)
         return True
 
     def _remember_directory(self, path: Path) -> None:

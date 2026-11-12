@@ -7,21 +7,24 @@ document when that changes.
 
 import math
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QLineF, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QLineF, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QContextMenuEvent,
     QDragEnterEvent,
     QDragMoveEvent,
     QDropEvent,
+    QImage,
     QKeyEvent,
     QMouseEvent,
     QPainter,
     QPen,
     QWheelEvent,
 )
+from PySide6.QtSvg import QSvgGenerator
 from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsScene,
@@ -838,6 +841,60 @@ class Canvas(QGraphicsView):
             self.select_ids({card.node_id})
         self.node_menu(card.node_id).exec(event.globalPos())
         event.accept()
+
+    # ------------------------------------------------------------------------ images
+
+    def content_rect(self) -> QRectF:
+        """The area the drawing occupies in this view, with some room around it."""
+        bounds = QRectF()
+        for item in self.node_items.values():
+            bounds = bounds.united(item.mapRectToScene(item.boundingRect()))
+        for zone in self.document.project.zones if self.view is None else ():
+            x, y = cell_origin(zone.x, zone.y)
+            bounds = bounds.united(QRectF(x, y, zone.width * CELL, zone.height * CELL))
+        if bounds.isEmpty():
+            bounds = QRectF(0, 0, 4 * CELL, 3 * CELL)
+        return bounds.adjusted(-CELL / 2, -CELL / 2, CELL / 2, CELL / 2)
+
+    def save_image(self, path: Path) -> None:
+        """Write what this view shows to a PNG or an SVG file, without the grid.
+
+        Raises ``ValueError`` for any other suffix. The selection is not drawn.
+        """
+        suffix = path.suffix.lower()
+        if suffix not in (".png", ".svg"):
+            raise ValueError("an image is saved as .png or .svg")
+        source = self.content_rect()
+        width, height = round(source.width()), round(source.height())
+        chosen = self.selected_ids()
+        link = self.selected_link
+        self.scene().clearSelection()
+        self.selected_link = None
+        try:
+            if suffix == ".svg":
+                generator = QSvgGenerator()
+                generator.setFileName(str(path))
+                generator.setSize(QSize(width, height))
+                generator.setViewBox(QRectF(0, 0, width, height))
+                generator.setTitle(self.document.project.name)
+                painter = QPainter(generator)
+                target = QRectF(0, 0, width, height)
+                painter.fillRect(target, QColor(self.tokens.background))
+                self.scene().render(painter, target, source)
+                painter.end()
+            else:
+                image = QImage(width * 2, height * 2, QImage.Format.Format_ARGB32)
+                image.fill(QColor(self.tokens.background))
+                painter = QPainter(image)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                self.scene().render(painter, QRectF(image.rect()), source)
+                painter.end()
+                if not image.save(str(path)):
+                    raise OSError("the image could not be written")
+        finally:
+            self.select_ids(set(chosen))
+            self.selected_link = link
+            self._backdrop.update()
 
     # ---------------------------------------------------------------------- the view
 
