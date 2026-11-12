@@ -28,7 +28,7 @@ The full statement of purpose, of what it will never do, and of the model is in
 ## Roadmap
 
 - [x] Scope and project scaffold
-- [ ] Model and project file
+- [x] Model and project file (no window yet; see [examples](examples/))
 - [ ] Canvas: grid, devices, undo and redo, save and load
 - [ ] Nesting, ports and links
 - [ ] Addresses, VLANs and automatic checks

@@ -53,18 +53,34 @@ and *what goes down if this device is switched off?*
 
 This is a sketch, not an interface. Names will settle while the model is written.
 
-- **Node**: a thing on the grid. It has a kind (router, switch, access point, NAS,
-  mini PC, virtual machine, container, service, and so on), a name, a position, an
-  optional parent (nesting), interfaces and services.
+- **Node**: a thing on the grid. It has a kind from the catalogue (router, switch,
+  access point, NAS, mini PC, virtual machine, container, and so on), a name, a
+  position in whole grid cells, an optional parent (nesting), interfaces, the services
+  it listens on, and, for a node that forwards traffic, an ordered list of rules. A
+  node with a parent is placed relative to it, so moving a host moves what is inside.
+  The catalogue decides what a kind may contain: a NAS may host virtual machines and
+  containers, a switch may host nothing.
 - **Interface**: a named port on a node, with addresses, a VLAN and a mode (access or
   trunk). A switch node has the number of ports its kind says it has.
 - **Link**: a cable or a wireless link between two interfaces, with a medium and a
   speed.
 - **Zone**: a named area on the grid (LAN, IoT, guests, DMZ) that groups nodes by
   purpose.
-- **Flow**: a statement that one service talks to another, over a protocol and a port.
-- **Rule**: a simplified allow or deny entry on a node that filters traffic (a
-  firewall, a router with access lists).
+- **Flow**: a statement that one node talks to a service of another, over a protocol
+  and a port.
+- **Rule**: a simplified allow or deny entry on a node that forwards traffic (a
+  firewall, a router with access lists, a virtual machine that runs a firewall). Source
+  and destination are `any`, a network, or a node; the first matching rule wins.
+
+### Two kinds of check
+
+- **Structural checks** guard the model's own consistency: a cable to a node that does
+  not exist, a container inside a switch, two cables on one port, a parent that is its
+  own grandchild. A project that fails them is refused when loaded, because the
+  analysis relies on them. They are implemented in `validation.py`.
+- **Design checks** are warnings about the homelab itself: duplicate addresses, a VLAN
+  that is not carried by a trunk, a single point of failure. They never block a project.
+  They arrive in M4.
 
 ### Reachability, first version
 
@@ -79,18 +95,24 @@ firewall's connection table. The application lists these next to every result.
 
 ## Project file
 
-A project is one JSON file: a format version, the nodes, the links, the zones, the
-flows. Keys are sorted and the layout is stable, so the file diffs cleanly in git and
-a diagram can live next to the infrastructure it describes. The file is data only:
-loading it never executes anything, and a file over a size limit, or from a newer format
-version than the application knows, is refused with a message rather than guessed at.
+A project is one JSON file, by convention named `<name>.homelab.json`: a format
+version, the nodes, the links, the zones, the flows. Keys are sorted, collections are
+ordered by id and the layout is fixed, so the same homelab always gives the same bytes
+and the file diffs cleanly in git. A diagram can live next to the infrastructure it
+describes.
+
+The file is data only. Loading it never executes anything, and it is read strictly: an
+unknown field, a value of the wrong type, a reference to something that does not exist,
+a file over 5 MiB, or a file from a newer format version than the application knows is
+refused with a message that names where the problem is. A save writes a temporary file
+first and replaces the old one only when the new one is complete.
 
 ## Milestones
 
 | Milestone | Content |
 | --- | --- |
 | **M0** | This page, repository scaffold, tooling, CI, git identity. |
-| **M1** | Model and project file, pure and tested. No window. |
+| **M1** (done) | Catalogue, model, structural checks and project file, pure and tested. No window. An invented example project ships in `examples/`. |
 | **M2** | The canvas: grid, placing devices from the catalogue, moving, selecting, undo and redo, save and load. First packaged build on a provisional tag, to find packaging problems while there is little code. |
 | **M3** | Nesting (host, virtual machine, container, service), ports and links. |
 | **M4** | Interfaces, addresses, VLANs, and the automatic checks (duplicate addresses, ports over capacity, trunk and VLAN mismatches). |
